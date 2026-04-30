@@ -68,6 +68,32 @@ const WEAPONS = [
 // Player muzzle flash decay
 const MUZZLE_FLASH_MS = 90;
 
+// ---------- Hamster NPC AI — Pac-Man-style personalities + chase/scatter modes ----------
+// Most hamsters are passive WANDERER. ~30% are aggressive (split among 3 archetypes).
+const PERSONALITY_WANDERER = 0; // graze + wander, skittish to gunshots only
+const PERSONALITY_CHASER   = 1; // straight-line chase toward player position (Blinky)
+const PERSONALITY_AMBUSHER = 2; // intercept — aim ahead of player velocity (Pinky)
+const PERSONALITY_FLANKER  = 3; // approach from a perpendicular angle (Inky)
+
+// Override coat tint for aggressive types so the player can read them at a glance
+const AGGRESSIVE_TINTS = {
+  [PERSONALITY_CHASER]:   new THREE.Color(0xff5050), // angry red
+  [PERSONALITY_AMBUSHER]: new THREE.Color(0xffaedb), // bubblegum pink
+  [PERSONALITY_FLANKER]:  new THREE.Color(0x80e0ff), // sky cyan
+};
+
+const NPC_AGGRESSIVE_FRAC = 0.30; // share of swarm that is aggressive
+const NPC_CHASE_SPEED     = 3.6;
+const NPC_ATTACK_SPEED    = 7.5;
+const ATTACK_RANGE        = 1.7;  // distance at which a chasing NPC commits to attack
+const ATTACK_HIT_RANGE    = 2.4;  // landing window during the lunge
+const ATTACK_DURATION_MS  = 460;
+const ATTACK_COOLDOWN_MS  = 1500;
+
+// Global swarm mode oscillation — drives whether aggressive NPCs chase or scatter
+const SWARM_MODE_SCATTER_MS = 9000;
+const SWARM_MODE_CHASE_MS   = 14000;
+
 // ============================================================
 //   HUD (style + DOM) — design language reused from Hammas gun.js
 // ============================================================
@@ -225,6 +251,10 @@ function injectHUD() {
     #gunHud .stat.acc .stat-value {
       color: #38bdf8; text-shadow: 0 0 8px rgba(56, 189, 248, 0.45);
     }
+    /* Bites stat tints red so player notices when it ticks up */
+    #gunHud .stat.bites .stat-value {
+      color: #ff5050; text-shadow: 0 0 8px rgba(255, 80, 80, 0.50);
+    }
 
     /* ←  BACK pill (top-left) — glassmorphism, only visible when paused */
     #backPill {
@@ -367,6 +397,11 @@ function injectHUD() {
     <div class="stat acc">
       <span class="stat-label">ACC</span>
       <span class="stat-value" id="accCount">0%</span>
+    </div>
+    <div class="divider"></div>
+    <div class="stat bites">
+      <span class="stat-label">BITES</span>
+      <span class="stat-value" id="biteCount">0</span>
     </div>
   `;
   document.body.appendChild(hud);
@@ -975,15 +1010,29 @@ class Swarm {
     this.mesh = this.coatMesh;
 
     // Per-instance state
-    this.pos       = new Float32Array(count * 3);
-    this.heading   = new Float32Array(count); // yaw radians (XZ angle, 0 = +X)
-    this.state     = new Uint8Array(count);   // 1 wander, 2 flee, 3 dead
-    this.fleeUntil = new Float32Array(count);
-    this.deadAt    = new Float32Array(count);
-    this.spawnedAt = new Float32Array(count); // ms timestamp for fade-in
-    this.phase     = new Float32Array(count);
-    this.changeAt  = new Float32Array(count);
-    this.alive     = new Uint8Array(count);
+    this.pos           = new Float32Array(count * 3);
+    this.heading       = new Float32Array(count); // current yaw, radians (XZ angle, 0 = +X)
+    this.headingTarget = new Float32Array(count); // desired yaw — heading lerps toward this for smooth turns
+    this.state         = new Uint8Array(count);   // 0 idle · 1 wander · 2 flee · 3 dead · 4 chase · 5 attack
+    this.fleeUntil     = new Float32Array(count);
+    this.deadAt        = new Float32Array(count);
+    this.spawnedAt     = new Float32Array(count); // ms timestamp for fade-in
+    this.phase         = new Float32Array(count);
+    this.changeAt      = new Float32Array(count);
+    this.alive         = new Uint8Array(count);
+    this.speedMul      = new Float32Array(count);    // 0.85..1.20 base-speed mul
+    this.hopAt         = new Float32Array(count);
+    this.hopFrom       = new Float32Array(count);
+    this.personality   = new Uint8Array(count);      // 0 wanderer · 1 chaser · 2 ambusher · 3 flanker
+    this.attackStartedAt = new Float32Array(count);
+    this.attackCooldown  = new Float32Array(count);
+
+    // Global swarm mode — alternates SCATTER / CHASE (Pac-Man style)
+    this.mode = 'SCATTER';
+    this.modeChangeAt = performance.now() + SWARM_MODE_SCATTER_MS;
+
+    // Bite callback — Game wires this up to bookkeeping + HUD
+    this.onBite = null;
 
     const tintColor = new THREE.Color();
     for (let i = 0; i < count; i++) {
@@ -1025,21 +1074,39 @@ class Swarm {
       tries++;
     } while (nearPlayer && tries < 10 &&
              Math.hypot(x - nearPlayer.x, z - nearPlayer.z) < 14);
-    this.pos[3 * i]     = x;
-    this.pos[3 * i + 1] = 0;
-    this.pos[3 * i + 2] = z;
-    this.heading[i]   = Math.random() * Math.PI * 2;
-    this.state[i]     = 1;
-    this.fleeUntil[i] = 0;
-    this.deadAt[i]    = 0;
-    this.spawnedAt[i] = now;
-    this.phase[i]     = Math.random() * Math.PI * 2;
-    this.changeAt[i]  = now + 800 + Math.random() * 2400;
-    this.alive[i]     = 1;
+    this.pos[3 * i]      = x;
+    this.pos[3 * i + 1]  = 0;
+    this.pos[3 * i + 2]  = z;
+    this.heading[i]      = Math.random() * Math.PI * 2;
+    this.headingTarget[i]= this.heading[i];
+    this.state[i]        = 1;
+    this.fleeUntil[i]    = 0;
+    this.deadAt[i]       = 0;
+    this.spawnedAt[i]    = now;
+    this.phase[i]        = Math.random() * Math.PI * 2;
+    this.changeAt[i]     = now + 800 + Math.random() * 2400;
+    this.alive[i]        = 1;
+    this.speedMul[i]     = 0.85 + Math.random() * 0.35;
+    this.hopAt[i]        = now + 600 + Math.random() * 1800;
+    this.hopFrom[i]      = 0;
+    this.attackStartedAt[i] = 0;
+    this.attackCooldown[i]  = 0;
 
-    // re-randomise tint on respawn so successive spawns vary
+    // Personality roll: 70% wanderer · 10% each chaser/ambusher/flanker
+    const r = Math.random();
+    if (r < NPC_AGGRESSIVE_FRAC) {
+      const aggRoll = Math.floor(Math.random() * 3) + 1; // 1..3
+      this.personality[i] = aggRoll;
+      // Aggressive types stat-boost a bit so they actually feel threatening
+      this.speedMul[i] = 1.05 + Math.random() * 0.20;
+    } else {
+      this.personality[i] = PERSONALITY_WANDERER;
+    }
+
+    // Tint: aggressive personality forces a signature color, wanderer is random NPC_TINT
     if (this.coatMesh) {
-      const tint = NPC_TINTS[Math.floor(Math.random() * NPC_TINTS.length)];
+      const aggTint = AGGRESSIVE_TINTS[this.personality[i]];
+      const tint = aggTint || NPC_TINTS[Math.floor(Math.random() * NPC_TINTS.length)];
       this.coatMesh.setColorAt(i, tint);
       if (this.coatMesh.instanceColor) this.coatMesh.instanceColor.needsUpdate = true;
     }
@@ -1055,7 +1122,9 @@ class Swarm {
       if (dx * dx + dz * dz <= r2) {
         this.state[i] = 2;
         this.fleeUntil[i] = now + FLEE_DURATION_MS;
-        this.heading[i] = Math.atan2(dz, dx);
+        this.headingTarget[i] = Math.atan2(dz, dx);
+        // Wake idlers by giving them an immediate hop
+        if (this.hopFrom[i] === 0) this.hopAt[i] = now;
       }
     }
   }
@@ -1077,10 +1146,24 @@ class Swarm {
     return false;
   }
 
-  tick(dt, now, player) {
+  tick(dt, now, player, playerVel) {
     const px = player.position.x;
     const pz = player.position.z;
+    const pvx = playerVel ? playerVel.x : 0;
+    const pvz = playerVel ? playerVel.z : 0;
     const upY = new THREE.Vector3(0, 1, 0);
+
+    // -------- Global swarm mode timer (Pac-Man-style scatter ↔ chase) --------
+    if (now > this.modeChangeAt) {
+      if (this.mode === 'SCATTER') {
+        this.mode = 'CHASE';
+        this.modeChangeAt = now + SWARM_MODE_CHASE_MS;
+      } else {
+        this.mode = 'SCATTER';
+        this.modeChangeAt = now + SWARM_MODE_SCATTER_MS;
+      }
+    }
+    const swarmChasing = (this.mode === 'CHASE');
 
     for (let i = 0; i < this.count; i++) {
       if (!this.alive[i]) {
@@ -1099,7 +1182,6 @@ class Swarm {
           continue;
         }
         const s = 1 - t * t;
-        // Use the same yaw conversion as living (-heading + PI/2) so the slump faces correctly
         const deadYaw = -this.heading[i] + Math.PI / 2;
         this._tmpQ.setFromEuler(new THREE.Euler(0, deadYaw, Math.PI / 2));
         this._tmpS.set(s, s, s);
@@ -1111,37 +1193,144 @@ class Swarm {
         continue;
       }
 
-      // Behavior
-      let speed = NPC_WANDER_SPEED;
-      if (st === 2) {
-        if (now > this.fleeUntil[i]) {
-          this.state[i] = 1;
+      // -------- State machine --------
+      let stCur = st;
+      const personality = this.personality[i];
+      const isAggressive = (personality !== PERSONALITY_WANDERER);
+
+      // FLEE expires
+      if (stCur === 2 && now > this.fleeUntil[i]) {
+        this.state[i] = isAggressive && swarmChasing ? 4 : 1;
+        stCur = this.state[i];
+      }
+      // FLEE: aim away from player smoothly
+      if (stCur === 2) {
+        const dx = this.pos[3 * i] - px;
+        const dz = this.pos[3 * i + 2] - pz;
+        this.headingTarget[i] = Math.atan2(dz, dx);
+      }
+
+      // ATTACK lunge: timed window, lock heading toward player, then back to chase
+      if (stCur === 5) {
+        const at = now - this.attackStartedAt[i];
+        if (at > ATTACK_DURATION_MS) {
+          // Did we land within hit range? Fire onBite once per lunge
+          const ddx = px - this.pos[3 * i];
+          const ddz = pz - this.pos[3 * i + 2];
+          if (ddx * ddx + ddz * ddz < ATTACK_HIT_RANGE * ATTACK_HIT_RANGE && this.onBite) {
+            this.onBite(this.pos[3 * i], this.pos[3 * i + 2]);
+          }
+          this.state[i] = isAggressive && swarmChasing ? 4 : 1;
+          stCur = this.state[i];
+          this.attackCooldown[i] = now + ATTACK_COOLDOWN_MS;
         } else {
-          speed = NPC_FLEE_SPEED;
-          const dx = this.pos[3 * i] - px;
-          const dz = this.pos[3 * i + 2] - pz;
-          this.heading[i] = Math.atan2(dz, dx);
-        }
-      } else {
-        if (now > this.changeAt[i]) {
-          this.heading[i] += (Math.random() - 0.5) * 1.6;
-          this.changeAt[i] = now + 700 + Math.random() * 2200;
+          this.headingTarget[i] = Math.atan2(pz - this.pos[3 * i + 2], px - this.pos[3 * i]);
         }
       }
 
-      // Move
+      // CHASE: aggressive types pursue player using personality-based target
+      if (stCur === 4) {
+        if (!swarmChasing) {
+          this.state[i] = 1; stCur = 1;
+        } else {
+          let tx = px, tz = pz;
+          if (personality === PERSONALITY_AMBUSHER) {
+            tx = px + pvx * 1.5; tz = pz + pvz * 1.5;
+          } else if (personality === PERSONALITY_FLANKER) {
+            const len = Math.hypot(pvx, pvz) || 1;
+            const perpX = -pvz / len, perpZ = pvx / len;
+            // pick a side based on instance index so flankers split L/R consistently
+            const side = (i & 1) ? 1 : -1;
+            tx = px + perpX * 5 * side; tz = pz + perpZ * 5 * side;
+          }
+          this.headingTarget[i] = Math.atan2(tz - this.pos[3 * i + 2], tx - this.pos[3 * i]);
+          // Within ATTACK_RANGE → commit lunge (respect cooldown)
+          const ddx = px - this.pos[3 * i], ddz = pz - this.pos[3 * i + 2];
+          if (ddx * ddx + ddz * ddz < ATTACK_RANGE * ATTACK_RANGE && now > this.attackCooldown[i]) {
+            this.state[i] = 5; stCur = 5;
+            this.attackStartedAt[i] = now;
+            this.hopFrom[i] = now; // visual emphasis on lunge
+          }
+        }
+      }
+
+      // WANDER → CHASE transition for aggressive NPCs when global mode flips to CHASE
+      if (stCur === 1 && isAggressive && swarmChasing) {
+        this.state[i] = 4; stCur = 4;
+      }
+
+      // Heading-change / graze logic — only for non-chase/attack states
+      if ((stCur === 0 || stCur === 1) && now > this.changeAt[i]) {
+        if (stCur === 1) {
+          if (Math.random() < 0.22) {
+            this.state[i] = 0; stCur = 0;
+            this.changeAt[i] = now + 1000 + Math.random() * 1800;
+          } else {
+            this.headingTarget[i] = this.heading[i] + (Math.random() - 0.5) * 1.6;
+            this.changeAt[i] = now + 900 + Math.random() * 2200;
+          }
+        } else if (stCur === 0) {
+          this.state[i] = 1; stCur = 1;
+          this.headingTarget[i] = Math.random() * Math.PI * 2;
+          this.changeAt[i] = now + 1200 + Math.random() * 2400;
+        }
+      }
+
+      // -------- Smooth heading lerp --------
+      let dh = this.headingTarget[i] - this.heading[i];
+      while (dh >  Math.PI) dh -= Math.PI * 2;
+      while (dh < -Math.PI) dh += Math.PI * 2;
+      // Tighter turn while chase/attack/flee, gentle while wandering, slow while idle
+      const turnRate = (stCur === 5 ? 9.0
+                       : stCur === 4 ? 5.5
+                       : stCur === 2 ? 7.5
+                       : stCur === 1 ? 3.5
+                       : 1.0);
+      this.heading[i] += dh * Math.min(1, dt * turnRate);
+
+      // -------- Speed by state · per-instance personality --------
+      let speed = 0;
+      if      (stCur === 1) speed = NPC_WANDER_SPEED * this.speedMul[i];
+      else if (stCur === 2) speed = NPC_FLEE_SPEED   * this.speedMul[i];
+      else if (stCur === 4) speed = NPC_CHASE_SPEED  * this.speedMul[i];
+      else if (stCur === 5) speed = NPC_ATTACK_SPEED * this.speedMul[i];
+
+      // -------- Move + wall reflection --------
       let nx = this.pos[3 * i]     + Math.cos(this.heading[i]) * speed * dt;
       let nz = this.pos[3 * i + 2] + Math.sin(this.heading[i]) * speed * dt;
-      if (nx >  HALF_WORLD - 2) { nx =  HALF_WORLD - 2; this.heading[i] = Math.PI - this.heading[i]; }
-      if (nx < -HALF_WORLD + 2) { nx = -HALF_WORLD + 2; this.heading[i] = Math.PI - this.heading[i]; }
-      if (nz >  HALF_WORLD - 2) { nz =  HALF_WORLD - 2; this.heading[i] = -this.heading[i]; }
-      if (nz < -HALF_WORLD + 2) { nz = -HALF_WORLD + 2; this.heading[i] = -this.heading[i]; }
+      if (nx >  HALF_WORLD - 2) { nx =  HALF_WORLD - 2; this.heading[i] = Math.PI - this.heading[i]; this.headingTarget[i] = this.heading[i]; }
+      if (nx < -HALF_WORLD + 2) { nx = -HALF_WORLD + 2; this.heading[i] = Math.PI - this.heading[i]; this.headingTarget[i] = this.heading[i]; }
+      if (nz >  HALF_WORLD - 2) { nz =  HALF_WORLD - 2; this.heading[i] = -this.heading[i];          this.headingTarget[i] = this.heading[i]; }
+      if (nz < -HALF_WORLD + 2) { nz = -HALF_WORLD + 2; this.heading[i] = -this.heading[i];          this.headingTarget[i] = this.heading[i]; }
       this.pos[3 * i]     = nx;
       this.pos[3 * i + 2] = nz;
 
-      // Bob
-      const bob = Math.sin(now * 0.011 + this.phase[i]) * 0.06;
-      const y = (st === 2 ? 0.04 : 0.02) + Math.abs(bob);
+      // -------- Bob (smaller while idle, bigger while fleeing) --------
+      // -------- Bob (per-state amplitude) --------
+      const bobAmp = (stCur === 5 ? 0.12 : stCur === 4 ? 0.09 : stCur === 2 ? 0.10 : stCur === 0 ? 0.025 : 0.06);
+      const bob = Math.sin(now * 0.011 + this.phase[i]) * bobAmp;
+
+      // -------- Hop animation (parabolic Y boost during wander/flee/chase/attack) --------
+      let hopY = 0;
+      if (this.hopFrom[i] > 0) {
+        const hopDur = (stCur === 5 ? 220 : stCur === 2 ? 280 : 380);
+        const ht = now - this.hopFrom[i];
+        if (ht >= hopDur) {
+          this.hopFrom[i] = 0;
+        } else {
+          const u = ht / hopDur;
+          const peak = (stCur === 5 ? 0.65 : stCur === 2 ? 0.50 : stCur === 4 ? 0.36 : 0.28);
+          hopY = 4 * u * (1 - u) * peak;
+        }
+      } else if ((stCur === 1 || stCur === 2 || stCur === 4) && now > this.hopAt[i]) {
+        this.hopFrom[i] = now;
+        const minMs = (stCur === 4 ? 500 : stCur === 2 ? 320 : 1100);
+        const maxMs = (stCur === 4 ? 950 : stCur === 2 ? 600 : 2600);
+        this.hopAt[i] = now + minMs + Math.random() * (maxMs - minMs);
+      }
+
+      const baseY = (stCur === 5 ? 0.05 : stCur === 2 ? 0.04 : 0.02);
+      const y = baseY + Math.abs(bob) + hopY;
       this.pos[3 * i + 1] = y;
 
       // Spawn fade-in: scale 0 → 1 over SPAWN_FADE_MS using smoothstep
@@ -1296,10 +1485,14 @@ class Game {
     this.shotsEl  = document.getElementById('hitCount');
     this.bonkedEl = document.getElementById('hamCount');
     this.accEl    = document.getElementById('accCount');
+    this.bitesEl  = document.getElementById('biteCount');
     this.backPill = document.getElementById('backPill');
     this.pauseHint= document.getElementById('pauseHint');
     this.weaponPill = document.getElementById('weaponPill');
     this._setWeapon(0);
+
+    this.bites = 0;
+    this.swarm.onBite = (x, z) => this._handleBite(x, z);
 
     if (this.backPill) {
       const pause = () => this.setPaused(true);
@@ -1616,6 +1809,22 @@ class Game {
     this.accEl.textContent = acc + '%';
   }
 
+  _handleBite(worldX, worldZ) {
+    this.bites++;
+    if (this.bitesEl) {
+      this.bitesEl.textContent = this.bites;
+      bumpStat(this.bitesEl);
+    }
+    // Brief screen flash + onomatopoeia bubble at player screen position
+    flashVignette();
+    try {
+      const p = new THREE.Vector3(worldX, 0.5, worldZ);
+      const screen = projectToScreen(p, this.camera);
+      const cries = ['BITE!', 'NOM!', 'CHOMP!', 'OW!', 'GNAW!'];
+      popBubble(screen.x, screen.y, cries[Math.floor(Math.random() * cries.length)], 'warn');
+    } catch (e) {}
+  }
+
   _decayMuzzle3D(now) {
     if (!this.muzzleMesh || !this.muzzleFiredAt) return;
     const t = now - this.muzzleFiredAt;
@@ -1652,7 +1861,7 @@ class Game {
     this._updateAim();
     this._updatePlayer(dt);
     this._updateCamera(dt);
-    this.swarm.tick(dt, now, this.player);
+    this.swarm.tick(dt, now, this.player, this.velocity);
     this._tryFire(now);
     this._maybeRespawn(now);
     this._decayMuzzle3D(now);
