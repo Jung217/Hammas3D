@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#0c1018" />
+<title>Hammas — Hamster Grassland</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0c1018; color: #f5f7fb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; }
+  #gameCanvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+  body.armed, body.armed * { cursor: none !important; }
+
+  #splash {
+    position: fixed; inset: 0; z-index: 50;
+    display: grid; place-items: center;
+    background:
+      radial-gradient(ellipse at 50% 20%, rgba(255, 210, 120, 0.55), transparent 60%),
+      radial-gradient(ellipse at 50% 110%, rgba(180, 95, 15, 0.65), transparent 65%),
+      rgb(230, 156, 21);
+    color: rgba(255, 255, 255, 0.92);
+    text-align: center;
+    transition: opacity .45s ease;
+  }
+  #splash.hide { opacity: 0; pointer-events: none; }
+  #splash h1 {
+    font-size: 60px; font-weight: 800; letter-spacing: -0.02em;
+    margin: 0 0 6px; text-shadow: 0 6px 22px rgba(80, 40, 0, 0.28);
+  }
+  #splash .sub {
+    font-size: 14px; font-weight: 600; letter-spacing: 0.16em;
+    text-transform: uppercase; opacity: 0.78; margin-bottom: 26px;
+  }
+  #playBtn {
+    appearance: none; border: 1px solid rgba(255, 255, 255, 0.22);
+    background: rgba(12, 16, 24, 0.55); color: #fff;
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    padding: 14px 36px; border-radius: 999px;
+    font: 700 15px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: 0.18em; text-transform: uppercase; cursor: pointer;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    transition: transform .12s ease, background .2s ease, border-color .2s ease;
+  }
+  #playBtn:hover { background: rgba(20, 26, 38, 0.78); border-color: rgba(255, 255, 255, 0.45); }
+  #playBtn:active { transform: scale(0.97); }
+  #splash .hint {
+    margin-top: 18px; font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; opacity: 0.75; font-weight: 600;
+  }
+  #splash .hint .kbd {
+    display: inline-block; padding: 2px 7px; margin: 0 2px;
+    font: 700 10px/1 ui-monospace, Menlo, Consolas, monospace;
+    background: rgba(0, 0, 0, 0.32); border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 5px; letter-spacing: 0;
+  }
+</style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <div id="splash">
+    <div>
+      <h1>Hammas</h1>
+      <div class="sub">Hamster Grassland</div>
+      <button id="playBtn" type="button">PLAY</button>
+      <div class="hint">
+        mouse <span style="opacity:0.7;">steers</span> &nbsp;·&nbsp;
+        <span class="kbd">A</span>/<span class="kbd">D</span> strafe &nbsp;·&nbsp;
+        <span class="kbd">click</span> fire &nbsp;·&nbsp;
+        <span class="kbd">Q</span>/<span class="kbd">E</span> rotate cam
+      </div>
+      <div class="hint" style="margin-top:8px; opacity:0.65;">
+        <span class="kbd">1</span> pistol &nbsp;
+        <span class="kbd">2</span> smg &nbsp;
+        <span class="kbd">3</span> shotgun &nbsp;
+        <span class="kbd">4</span> sniper &nbsp;·&nbsp;
+        <span class="kbd">Esc</span> pause
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./js/three/three.module.js"
+    }
+  }
+  </script>
+  <script type="module" src="./js/grassland.js"></script>
+</body>
+</html>
