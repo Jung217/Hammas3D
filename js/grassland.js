@@ -94,6 +94,20 @@ const ATTACK_COOLDOWN_MS  = 1500;
 const SWARM_MODE_SCATTER_MS = 9000;
 const SWARM_MODE_CHASE_MS   = 14000;
 
+// Aggressive types ALSO react to gunshots — but opposite of wanderers (charge in, don't flee)
+const ALERT_RADIUS_AGGRESSIVE = 18;     // bigger than passive flee radius
+const AGGRO_RAGE_MS           = 5000;   // brief rage timer after hearing a shot
+const AGGRO_RAGE_SPEED_MUL    = 1.40;   // chase speed multiplier during rage
+
+// Camera modes — V key cycles through these
+const CAMERA_MODES = [
+  { name: 'CHASE', key: 'V' },
+  { name: 'FPS',   key: 'V' },
+  { name: 'TOP',   key: 'V' },
+];
+const FPS_CAM_HEIGHT     = 0.65;        // camera at hamster head height in first-person
+const TOPDOWN_CAM_HEIGHT = 38;          // straight-up height in top-down view
+
 // ============================================================
 //   HUD (style + DOM) — design language reused from Hammas gun.js
 // ============================================================
@@ -346,11 +360,44 @@ function injectHUD() {
       text-shadow: 0 0 10px var(--weapon-glow, rgba(255, 216, 74, 0.55));
     }
 
+    /* Camera mode pill (top-right under weapon pill) */
+    #cameraPill {
+      position: fixed; top: 56px; right: 14px;
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 12px 6px 6px;
+      background: var(--gun-bg);
+      backdrop-filter: blur(14px) saturate(140%);
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      border: 1px solid var(--gun-border);
+      border-radius: 999px;
+      box-shadow: var(--gun-shadow);
+      color: var(--gun-fg);
+      font: 700 11px/1 var(--gun-mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      pointer-events: none;
+      z-index: 99999;
+    }
+    #cameraPill .camera-key {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 19px; height: 19px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
+      font: 800 10px/1 var(--gun-mono);
+      letter-spacing: 0;
+    }
+    #cameraPill .camera-mode {
+      color: var(--gun-fg-dim);
+      font-weight: 700;
+    }
+
     /* Paused state — hide all in-game HUD so splash reads cleanly */
     body.paused #gunHud,
     body.paused #gunCrosshair,
     body.paused #gunOverlay,
-    body.paused #weaponPill { display: none !important; }
+    body.paused #weaponPill,
+    body.paused #cameraPill { display: none !important; }
 
     @media (prefers-reduced-motion: reduce) {
       #gunOverlay, .gun-bubble, .gun-muzzle, .gun-hit-ring, .gun-blood-vignette,
@@ -426,6 +473,12 @@ function injectHUD() {
   wp.id = 'weaponPill';
   wp.innerHTML = `<span class="weapon-key">1</span><span class="weapon-name">PISTOL</span>`;
   document.body.appendChild(wp);
+
+  // Camera mode pill (under weapon pill) — content updated by Game._setCameraMode
+  const cp = document.createElement('div');
+  cp.id = 'cameraPill';
+  cp.innerHTML = `<span class="camera-key">V</span><span class="camera-mode">CHASE</span>`;
+  document.body.appendChild(cp);
 }
 
 function setArmed(on) {
@@ -1026,6 +1079,7 @@ class Swarm {
     this.personality   = new Uint8Array(count);      // 0 wanderer · 1 chaser · 2 ambusher · 3 flanker
     this.attackStartedAt = new Float32Array(count);
     this.attackCooldown  = new Float32Array(count);
+    this.rageUntil       = new Float32Array(count);  // ms timestamp — aggressive types are enraged after a shot
 
     // Global swarm mode — alternates SCATTER / CHASE (Pac-Man style)
     this.mode = 'SCATTER';
@@ -1091,6 +1145,7 @@ class Swarm {
     this.hopFrom[i]      = 0;
     this.attackStartedAt[i] = 0;
     this.attackCooldown[i]  = 0;
+    this.rageUntil[i]       = 0;
 
     // Personality roll: 70% wanderer · 10% each chaser/ambusher/flanker
     const r = Math.random();
@@ -1114,17 +1169,33 @@ class Swarm {
 
   alertNear(point, now) {
     const px = point.x, pz = point.z;
-    const r2 = FLEE_RADIUS * FLEE_RADIUS;
+    const passiveR2  = FLEE_RADIUS * FLEE_RADIUS;
+    const aggroR2    = ALERT_RADIUS_AGGRESSIVE * ALERT_RADIUS_AGGRESSIVE;
     for (let i = 0; i < this.count; i++) {
       if (!this.alive[i] || this.state[i] === 3) continue;
       const dx = this.pos[3 * i] - px;
       const dz = this.pos[3 * i + 2] - pz;
-      if (dx * dx + dz * dz <= r2) {
-        this.state[i] = 2;
-        this.fleeUntil[i] = now + FLEE_DURATION_MS;
-        this.headingTarget[i] = Math.atan2(dz, dx);
-        // Wake idlers by giving them an immediate hop
-        if (this.hopFrom[i] === 0) this.hopAt[i] = now;
+      const d2 = dx * dx + dz * dz;
+      const personality = this.personality[i];
+      const isAggressive = (personality !== PERSONALITY_WANDERER);
+
+      if (isAggressive) {
+        // Aggressive types: gunshots = blood in the water. Big detection radius,
+        // switch straight to CHASE, and enrage for a few seconds (faster pursuit).
+        if (d2 <= aggroR2 && this.state[i] !== 5) {
+          this.state[i] = 4;
+          this.headingTarget[i] = Math.atan2(-dz, -dx); // toward the shot/player
+          this.rageUntil[i] = now + AGGRO_RAGE_MS;
+          if (this.hopFrom[i] === 0) this.hopAt[i] = now;
+        }
+      } else {
+        // Wanderers: classic flee away from the shot
+        if (d2 <= passiveR2) {
+          this.state[i] = 2;
+          this.fleeUntil[i] = now + FLEE_DURATION_MS;
+          this.headingTarget[i] = Math.atan2(dz, dx); // away
+          if (this.hopFrom[i] === 0) this.hopAt[i] = now;
+        }
       }
     }
   }
@@ -1288,12 +1359,16 @@ class Swarm {
                        : 1.0);
       this.heading[i] += dh * Math.min(1, dt * turnRate);
 
-      // -------- Speed by state · per-instance personality --------
+      // -------- Speed by state · per-instance personality · rage boost --------
       let speed = 0;
       if      (stCur === 1) speed = NPC_WANDER_SPEED * this.speedMul[i];
       else if (stCur === 2) speed = NPC_FLEE_SPEED   * this.speedMul[i];
       else if (stCur === 4) speed = NPC_CHASE_SPEED  * this.speedMul[i];
       else if (stCur === 5) speed = NPC_ATTACK_SPEED * this.speedMul[i];
+      // Aggressive types stay enraged for a few seconds after hearing a shot
+      if ((stCur === 4 || stCur === 5) && now < this.rageUntil[i]) {
+        speed *= AGGRO_RAGE_SPEED_MUL;
+      }
 
       // -------- Move + wall reflection --------
       let nx = this.pos[3 * i]     + Math.cos(this.heading[i]) * speed * dt;
@@ -1491,6 +1566,13 @@ class Game {
     this.weaponPill = document.getElementById('weaponPill');
     this._setWeapon(0);
 
+    this.cameraMode = 0;            // 0 chase · 1 fps · 2 top-down
+    this.cameraPill = document.getElementById('cameraPill');
+    // Cache references so we can toggle visibility per camera mode
+    this.playerBody  = this.player.getObjectByName('playerBody');
+    this.playerShadow = this.player.getObjectByName('playerShadow');
+    this._setCameraMode(0);
+
     this.bites = 0;
     this.swarm.onBite = (x, z) => this._handleBite(x, z);
 
@@ -1567,6 +1649,8 @@ class Game {
       if (k >= '1' && k <= String(WEAPONS.length)) {
         this._setWeapon(parseInt(k, 10) - 1);
       }
+      // Camera mode cycle
+      if (k === 'v') this._setCameraMode((this.cameraMode + 1) % CAMERA_MODES.length);
     });
     window.addEventListener('keyup', (e) => {
       const k = e.key.toLowerCase();
@@ -1631,10 +1715,32 @@ class Game {
   }
 
   _updateCamera(dt) {
-    // Smoothly tween yaw (≈ 0.18 s tween per plan)
+    // Smoothly tween yaw — only used by chase mode for Q/E camera rotation
     const yawDiff = this.cameraYawTarget - this.cameraYaw;
     this.cameraYaw += yawDiff * Math.min(1, dt * CAMERA_YAW_LERP);
 
+    if (this.cameraMode === 1) {
+      // -------- First-person: camera at hamster head, look toward aim --------
+      this.cameraPos.set(
+        this.player.position.x,
+        this.player.position.y + FPS_CAM_HEIGHT,
+        this.player.position.z,
+      );
+      this.camera.position.copy(this.cameraPos);
+      // Look 0.6 above ground at the aim point (so horizon reads naturally)
+      this.camera.lookAt(this.aimWorld.x, 0.6, this.aimWorld.z);
+      return;
+    }
+
+    if (this.cameraMode === 2) {
+      // -------- Top-down: straight overhead, camera "north" = -Z (up vector set in _setCameraMode) --------
+      this.cameraPos.set(this.player.position.x, TOPDOWN_CAM_HEIGHT, this.player.position.z);
+      this.camera.position.copy(this.cameraPos);
+      this.camera.lookAt(this.player.position.x, 0, this.player.position.z);
+      return;
+    }
+
+    // -------- Chase (default) --------
     const c = Math.cos(this.cameraYaw), s = Math.sin(this.cameraYaw);
     const ox = CAMERA_OFFSET.x * c - CAMERA_OFFSET.z * s;
     const oz = CAMERA_OFFSET.x * s + CAMERA_OFFSET.z * c;
@@ -1646,6 +1752,24 @@ class Game {
     this.cameraPos.z += (targetZ - this.cameraPos.z) * CAMERA_LERP;
     this.camera.position.copy(this.cameraPos);
     this.camera.lookAt(this.player.position.x, 0.6, this.player.position.z);
+  }
+
+  _setCameraMode(idx) {
+    if (idx < 0 || idx >= CAMERA_MODES.length) return;
+    this.cameraMode = idx;
+    const m = CAMERA_MODES[idx];
+    if (this.cameraPill) {
+      const k = this.cameraPill.querySelector('.camera-key');
+      const n = this.cameraPill.querySelector('.camera-mode');
+      if (k) k.textContent = m.key;
+      if (n) n.textContent = m.name;
+    }
+    // Visibility: in FPS hide our own body/shadow so we don't see the inside of the hamster
+    const isFPS = (idx === 1);
+    if (this.playerBody)   this.playerBody.visible   = !isFPS;
+    if (this.playerShadow) this.playerShadow.visible = !isFPS;
+    // In top-down, set camera up vector so "north" stays consistent on screen
+    this.camera.up.set(0, idx === 2 ? 0 : 1, idx === 2 ? -1 : 0);
   }
 
   _setWeapon(idx) {
