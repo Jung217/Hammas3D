@@ -106,7 +106,11 @@ const CAMERA_MODES = [
   { name: 'TOP',   key: 'V' },
 ];
 const FPS_CAM_HEIGHT     = 0.65;        // camera at hamster head height in first-person
-const TOPDOWN_CAM_HEIGHT = 38;          // straight-up height in top-down view
+const FPS_TURN_RATE      = 2.6;         // radians/sec — A/D turn speed when in FPS
+const TOPDOWN_CAM_HEIGHT = 70;          // default straight-up height in top-down view (was 38)
+const TOPDOWN_HEIGHT_MIN = 28;
+const TOPDOWN_HEIGHT_MAX = 160;
+const TOPDOWN_ZOOM_STEP  = 0.06;        // multiplier per wheel delta unit
 
 // ============================================================
 //   HUD (style + DOM) — design language reused from Hammas gun.js
@@ -1567,6 +1571,7 @@ class Game {
     this._setWeapon(0);
 
     this.cameraMode = 0;            // 0 chase · 1 fps · 2 top-down
+    this.topdownHeight = TOPDOWN_CAM_HEIGHT;  // adjustable via wheel in top-down mode
     this.cameraPill = document.getElementById('cameraPill');
     // Cache references so we can toggle visibility per camera mode
     this.playerBody  = this.player.getObjectByName('playerBody');
@@ -1636,6 +1641,15 @@ class Game {
       if (e.button === 0) this.firing = false;
     });
     window.addEventListener('blur', () => { this.firing = false; this.keys.clear(); });
+    // Wheel zoom — only meaningful in top-down mode; preventDefault stops the page from scrolling
+    window.addEventListener('wheel', (e) => {
+      if (this.paused || this.cameraMode !== 2) return;
+      e.preventDefault();
+      this.topdownHeight = Math.max(
+        TOPDOWN_HEIGHT_MIN,
+        Math.min(TOPDOWN_HEIGHT_MAX, this.topdownHeight + e.deltaY * TOPDOWN_ZOOM_STEP),
+      );
+    }, { passive: false });
     window.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
       // Esc always works (toggles pause)
@@ -1669,24 +1683,31 @@ class Game {
 
   _updatePlayer(dt) {
     const k = this.keys;
+    const isFPS = (this.cameraMode === 1);
 
-    // Auto-runner: only A/D strafes; the hamster always walks forward in its facing direction.
-    let strafe = 0;
-    if (k.has('a') || k.has('arrowleft'))  strafe -= 1;
-    if (k.has('d') || k.has('arrowright')) strafe += 1;
+    // Input mapping — A/D mean different things by camera mode:
+    //   FPS  : A/D rotate the hamster left/right (mouse must NOT steer or it's nausea-cam)
+    //   else : A/D strafe perpendicular to facing (mouse steers via aim point)
+    let strafe = 0, turn = 0;
+    if (k.has('a') || k.has('arrowleft'))  { if (isFPS) turn -= 1; else strafe -= 1; }
+    if (k.has('d') || k.has('arrowright')) { if (isFPS) turn += 1; else strafe += 1; }
+
+    // FPS turn — directly nudge the yaw target; smooth lerp at the bottom does the easing
+    if (isFPS && turn !== 0) {
+      this.playerYawTarget += turn * FPS_TURN_RATE * dt;
+    }
 
     // Player's local forward (geometry authored +Z) rotated by yaw around Y
     const yaw = this.player.rotation.y;
     const fwdX = Math.sin(yaw);
     const fwdZ = Math.cos(yaw);
-    // Right vector perpendicular to forward, on XZ plane
     const rightX =  Math.cos(yaw);
     const rightZ = -Math.sin(yaw);
 
-    const targetVx = fwdX * PLAYER_AUTO_FORWARD_SPEED + rightX * strafe * PLAYER_STRAFE_SPEED;
-    const targetVz = fwdZ * PLAYER_AUTO_FORWARD_SPEED + rightZ * strafe * PLAYER_STRAFE_SPEED;
+    // Velocity: always auto-forward + (strafe only when not FPS)
+    const targetVx = fwdX * PLAYER_AUTO_FORWARD_SPEED + (isFPS ? 0 : rightX * strafe * PLAYER_STRAFE_SPEED);
+    const targetVz = fwdZ * PLAYER_AUTO_FORWARD_SPEED + (isFPS ? 0 : rightZ * strafe * PLAYER_STRAFE_SPEED);
 
-    // Drift: lerp toward target velocity each frame — turns produce sideways slide
     const a = Math.min(1, dt * PLAYER_ACCEL_LERP);
     this.velocity.x += (targetVx - this.velocity.x) * a;
     this.velocity.z += (targetVz - this.velocity.z) * a;
@@ -1694,24 +1715,27 @@ class Game {
     this.player.position.x += this.velocity.x * dt;
     this.player.position.z += this.velocity.z * dt;
 
-    // World clamp — zero velocity component pressing into the wall so the auto-runner
-    // doesn't oscillate along boundaries; turning away frees the velocity again
     if (this.player.position.x >  HALF_WORLD - 1.5) { this.player.position.x =  HALF_WORLD - 1.5; if (this.velocity.x > 0) this.velocity.x = 0; }
     if (this.player.position.x < -HALF_WORLD + 1.5) { this.player.position.x = -HALF_WORLD + 1.5; if (this.velocity.x < 0) this.velocity.x = 0; }
     if (this.player.position.z >  HALF_WORLD - 1.5) { this.player.position.z =  HALF_WORLD - 1.5; if (this.velocity.z > 0) this.velocity.z = 0; }
     if (this.player.position.z < -HALF_WORLD + 1.5) { this.player.position.z = -HALF_WORLD + 1.5; if (this.velocity.z < 0) this.velocity.z = 0; }
 
-    // Face the aim point with smooth yaw drift — mouse cursor effectively steers the hamster
-    const dx = this.aimWorld.x - this.player.position.x;
-    const dz = this.aimWorld.z - this.player.position.z;
-    if (dx * dx + dz * dz > 0.0004) {
-      const heading = Math.atan2(dz, dx);
-      this.playerYawTarget = -heading + Math.PI / 2;
+    // Yaw target — mouse-steers ONLY in non-FPS modes. FPS keeps the locked heading.
+    if (!isFPS) {
+      const dx = this.aimWorld.x - this.player.position.x;
+      const dz = this.aimWorld.z - this.player.position.z;
+      if (dx * dx + dz * dz > 0.0004) {
+        const heading = Math.atan2(dz, dx);
+        this.playerYawTarget = -heading + Math.PI / 2;
+      }
     }
+
     let dYaw = this.playerYawTarget - this.player.rotation.y;
     while (dYaw >  Math.PI) dYaw -= Math.PI * 2;
     while (dYaw < -Math.PI) dYaw += Math.PI * 2;
-    this.player.rotation.y += dYaw * Math.min(1, dt * PLAYER_YAW_LERP);
+    // FPS turn responds faster (it's input-driven, not aim-driven), other modes use the regular lerp
+    const yawLerpRate = isFPS ? PLAYER_YAW_LERP * 1.6 : PLAYER_YAW_LERP;
+    this.player.rotation.y += dYaw * Math.min(1, dt * yawLerpRate);
   }
 
   _updateCamera(dt) {
@@ -1720,21 +1744,28 @@ class Game {
     this.cameraYaw += yawDiff * Math.min(1, dt * CAMERA_YAW_LERP);
 
     if (this.cameraMode === 1) {
-      // -------- First-person: camera at hamster head, look toward aim --------
+      // -------- First-person: camera at hamster head, looking down the player's facing axis --------
+      // Mouse cursor does NOT pull the camera around — A/D rotates the player → camera follows.
       this.cameraPos.set(
         this.player.position.x,
         this.player.position.y + FPS_CAM_HEIGHT,
         this.player.position.z,
       );
       this.camera.position.copy(this.cameraPos);
-      // Look 0.6 above ground at the aim point (so horizon reads naturally)
-      this.camera.lookAt(this.aimWorld.x, 0.6, this.aimWorld.z);
+      const yaw = this.player.rotation.y;
+      const fwdX = Math.sin(yaw);
+      const fwdZ = Math.cos(yaw);
+      this.camera.lookAt(
+        this.player.position.x + fwdX * 5,
+        this.player.position.y + 0.45,           // a touch above forward to feel like horizon, not feet
+        this.player.position.z + fwdZ * 5,
+      );
       return;
     }
 
     if (this.cameraMode === 2) {
-      // -------- Top-down: straight overhead, camera "north" = -Z (up vector set in _setCameraMode) --------
-      this.cameraPos.set(this.player.position.x, TOPDOWN_CAM_HEIGHT, this.player.position.z);
+      // -------- Top-down: straight overhead, height adjustable via wheel --------
+      this.cameraPos.set(this.player.position.x, this.topdownHeight, this.player.position.z);
       this.camera.position.copy(this.cameraPos);
       this.camera.lookAt(this.player.position.x, 0, this.player.position.z);
       return;
