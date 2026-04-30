@@ -83,8 +83,14 @@ const AGGRESSIVE_TINTS = {
 };
 
 const NPC_AGGRESSIVE_FRAC = 0.30; // share of swarm that is aggressive
-const NPC_CHASE_SPEED     = 3.6;
-const NPC_ATTACK_SPEED    = 7.5;
+const NPC_CHASE_SPEED     = 5.2;     // base aggressive pursuit speed (was 3.6)
+const NPC_ATTACK_SPEED    = 9.8;     // commit-to-lunge speed (was 7.5)
+// Random evasion while chasing — sine wave on heading + occasional sharp jukes
+const NPC_DODGE_AMP       = 0.55;    // ±31° lateral wiggle on the chase line
+const NPC_DODGE_FREQ      = 0.0055;  // sin(now * freq + phase) — period ≈ 1.14 s
+const NPC_JUKE_MIN_MS     = 380;     // min interval between sharp side jukes
+const NPC_JUKE_MAX_MS     = 1100;
+const NPC_JUKE_AMP        = 0.85;    // ±49° instant offset added to dodge target
 const ATTACK_RANGE        = 1.7;  // distance at which a chasing NPC commits to attack
 const ATTACK_HIT_RANGE    = 2.4;  // landing window during the lunge
 const ATTACK_DURATION_MS  = 460;
@@ -1084,6 +1090,9 @@ class Swarm {
     this.attackStartedAt = new Float32Array(count);
     this.attackCooldown  = new Float32Array(count);
     this.rageUntil       = new Float32Array(count);  // ms timestamp — aggressive types are enraged after a shot
+    this.dodgePhase      = new Float32Array(count);  // sine offset for chase-line wiggle
+    this.jukeAt          = new Float32Array(count);  // ms timestamp for next sharp side juke
+    this.jukeOffset      = new Float32Array(count);  // current juke heading delta (decays)
 
     // Global swarm mode — alternates SCATTER / CHASE (Pac-Man style)
     this.mode = 'SCATTER';
@@ -1150,6 +1159,9 @@ class Swarm {
     this.attackStartedAt[i] = 0;
     this.attackCooldown[i]  = 0;
     this.rageUntil[i]       = 0;
+    this.dodgePhase[i]      = Math.random() * Math.PI * 2;
+    this.jukeAt[i]          = now + 600 + Math.random() * 1000;
+    this.jukeOffset[i]      = 0;
 
     // Personality roll: 70% wanderer · 10% each chaser/ambusher/flanker
     const r = Math.random();
@@ -1303,9 +1315,10 @@ class Swarm {
         }
       }
 
-      // CHASE: aggressive types pursue player using personality-based target
+      // CHASE: aggressive types pursue player using personality-based target + jinking
       if (stCur === 4) {
-        if (!swarmChasing) {
+        if (!swarmChasing && now >= this.rageUntil[i]) {
+          // Mode is SCATTER and rage from a shot has worn off → drop chase
           this.state[i] = 1; stCur = 1;
         } else {
           let tx = px, tz = pz;
@@ -1314,11 +1327,26 @@ class Swarm {
           } else if (personality === PERSONALITY_FLANKER) {
             const len = Math.hypot(pvx, pvz) || 1;
             const perpX = -pvz / len, perpZ = pvx / len;
-            // pick a side based on instance index so flankers split L/R consistently
             const side = (i & 1) ? 1 : -1;
             tx = px + perpX * 5 * side; tz = pz + perpZ * 5 * side;
           }
-          this.headingTarget[i] = Math.atan2(tz - this.pos[3 * i + 2], tx - this.pos[3 * i]);
+          const baseHeading = Math.atan2(tz - this.pos[3 * i + 2], tx - this.pos[3 * i]);
+
+          // ---- Random evasion: continuous sine wiggle + occasional sharp juke ----
+          const wiggle = Math.sin(now * NPC_DODGE_FREQ + this.dodgePhase[i]) * NPC_DODGE_AMP;
+          if (now > this.jukeAt[i]) {
+            this.jukeOffset[i] = (Math.random() - 0.5) * 2 * NPC_JUKE_AMP;
+            this.jukeAt[i] = now + NPC_JUKE_MIN_MS + Math.random() * (NPC_JUKE_MAX_MS - NPC_JUKE_MIN_MS);
+          } else {
+            // exponential decay back to 0 — sharp pop, smooth tail
+            this.jukeOffset[i] *= Math.exp(-dt * 4.0);
+          }
+          // Suppress dodge as we close in so the final approach actually lands the lunge
+          const ddx0 = px - this.pos[3 * i], ddz0 = pz - this.pos[3 * i + 2];
+          const dist = Math.sqrt(ddx0 * ddx0 + ddz0 * ddz0);
+          const dodgeAtten = Math.max(0, Math.min(1, (dist - 2.0) / 4.0));   // 0 within 2u, full at 6u+
+          this.headingTarget[i] = baseHeading + (wiggle + this.jukeOffset[i]) * dodgeAtten;
+
           // Within ATTACK_RANGE → commit lunge (respect cooldown)
           const ddx = px - this.pos[3 * i], ddz = pz - this.pos[3 * i + 2];
           if (ddx * ddx + ddz * ddz < ATTACK_RANGE * ATTACK_RANGE && now > this.attackCooldown[i]) {
