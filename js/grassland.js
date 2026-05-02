@@ -205,6 +205,44 @@ class Game {
     this._perfFrames = 0;
     this._perfLastUpdate = performance.now();
 
+    // ---- Mobile / touch UI wiring ----
+    this.mobileFire        = document.getElementById('mobileFire');
+    this.mobileWeaponLabel = document.getElementById('mobileWeaponName');
+    this.mobileCameraLabel = document.getElementById('mobileCameraName');
+    if (this.mobileFire) {
+      const fireOn = (e) => {
+        e.preventDefault();
+        if (this.paused) return;
+        if (performance.now() < this.gateUntil) return;
+        this.firing = true;
+        this.mobileFire.classList.add('firing');
+      };
+      const fireOff = (e) => {
+        e.preventDefault();
+        this.firing = false;
+        this.mobileFire.classList.remove('firing');
+      };
+      this.mobileFire.addEventListener('pointerdown', fireOn);
+      this.mobileFire.addEventListener('pointerup',     fireOff);
+      this.mobileFire.addEventListener('pointercancel', fireOff);
+      this.mobileFire.addEventListener('pointerleave',  fireOff);
+    }
+    document.getElementById('mobileWeapon')?.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      this._setWeapon((this.currentWeapon + 1) % WEAPONS.length);
+    });
+    document.getElementById('mobileCamera')?.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      this._setCameraMode((this.cameraMode + 1) % CAMERA_MODES.length);
+    });
+    document.getElementById('mobilePause')?.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      this.setPaused(!this.paused);
+    });
+    // Make sure initial labels match the first weapon/camera
+    if (this.mobileWeaponLabel) this.mobileWeaponLabel.textContent = WEAPONS[0].name;
+    if (this.mobileCameraLabel) this.mobileCameraLabel.textContent = CAMERA_MODES[0].name;
+
     if (this.backPill) {
       const pause = () => this.setPaused(true);
       this.backPill.addEventListener('click', pause);
@@ -259,7 +297,8 @@ class Game {
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
   }
 
-  // NOTE: this game targets desktop only — mouse + keyboard. Touch is out of scope for v1.
+  // Desktop: mouse + keyboard. Touch devices get the pointer-event branch + on-screen
+  // mobile UI (fire button + weapon/camera/pause column) wired in the constructor.
   _bindInput() {
     const cross = document.getElementById('gunCrosshair');
     const onMove = (e) => {
@@ -270,18 +309,26 @@ class Game {
         cross.style.top  = e.clientY + 'px';
       }
     };
-    window.addEventListener('mousemove', onMove);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('contextmenu', (e) => e.preventDefault());
-    window.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
+    // Treat any non-UI pointerdown as a fire trigger so taps on touch screens shoot too.
+    window.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
       if (this.paused) return;
       if (performance.now() < this.gateUntil) return; // splash → game leak guard
+      // Don't fire when the user taps any UI element (mobile buttons, pills, splash, etc.)
+      if (e.target && e.target.closest && e.target.closest(
+        '#mobileFire, #mobileButtons, #weaponPill, #cameraPill, #backPill, #pauseHint, #splash, #playBtn'
+      )) return;
       this.firing = true;
+      onMove(e); // make sure aim follows the touch point on first contact
     });
-    window.addEventListener('mouseup', (e) => {
-      if (e.button === 0) this.firing = false;
-    });
+    const stopFire = (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      this.firing = false;
+    };
+    window.addEventListener('pointerup',     stopFire);
+    window.addEventListener('pointercancel', stopFire);
     window.addEventListener('blur', () => { this.firing = false; this.keys.clear(); });
     // Wheel zoom — only meaningful in top-down mode; preventDefault stops the page from scrolling
     window.addEventListener('wheel', (e) => {
@@ -442,6 +489,7 @@ class Game {
       if (k) k.textContent = m.key;
       if (n) n.textContent = m.name;
     }
+    if (this.mobileCameraLabel) this.mobileCameraLabel.textContent = m.name;
     // Visibility: in FPS hide our own body/shadow so we don't see the inside of the hamster
     const isFPS = (idx === 1);
     if (this.playerBody)   this.playerBody.visible   = !isFPS;
@@ -473,6 +521,7 @@ class Game {
       this.weaponPill.style.setProperty('--weapon-color', `rgb(${r},${g},${b})`);
       this.weaponPill.style.setProperty('--weapon-glow',  `rgba(${r},${g},${b},0.55)`);
     }
+    if (this.mobileWeaponLabel) this.mobileWeaponLabel.textContent = w.name;
   }
 
   _tryFire(now) {

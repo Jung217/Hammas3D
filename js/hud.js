@@ -309,6 +309,78 @@ export function injectHUD() {
       font-weight: 700;
     }
 
+    /* ===========================================================
+       Mobile / touch controls — visible only on touch-capable devices
+       (coarse pointer = phone/tablet; mouse devices keep desktop layout)
+       =========================================================== */
+    #mobileFire, #mobileButtons { display: none; }
+    @media (pointer: coarse) {
+      #mobileFire   { display: flex; }
+      #mobileButtons { display: flex; }
+      /* Bigger tap targets for the existing pills on touch screens */
+      #weaponPill, #cameraPill, #backPill { font-size: 13px; padding-top: 10px; padding-bottom: 10px; }
+    }
+
+    /* Big circular FIRE button — bottom-right, primary action */
+    #mobileFire {
+      position: fixed; bottom: 28px; right: 24px;
+      width: 92px; height: 92px;
+      border-radius: 50%;
+      background: rgba(255, 58, 79, 0.55);
+      border: 3px solid rgba(255, 255, 255, 0.42);
+      box-shadow: 0 10px 28px rgba(255, 58, 79, 0.45),
+                  inset 0 0 18px rgba(255, 255, 255, 0.12);
+      align-items: center; justify-content: center;
+      font: 800 15px/1 var(--gun-mono);
+      letter-spacing: 0.18em; color: #fff;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+      pointer-events: auto;
+      z-index: 99999;
+      transition: background .12s ease, transform .08s ease;
+    }
+    #mobileFire.firing {
+      background: rgba(255, 58, 79, 0.92);
+      transform: scale(0.93);
+      box-shadow: 0 6px 18px rgba(255, 58, 79, 0.65),
+                  inset 0 0 24px rgba(255, 255, 255, 0.25);
+    }
+
+    /* Small button column — left side, easier for left thumb in landscape */
+    #mobileButtons {
+      position: fixed; bottom: 30px; left: 16px;
+      flex-direction: column; gap: 12px;
+      align-items: flex-start;
+      z-index: 99999;
+      pointer-events: none;
+    }
+    #mobileButtons .mbtn {
+      width: 64px; height: 56px;
+      border-radius: 28px;
+      background: rgba(12, 16, 24, 0.78);
+      backdrop-filter: blur(12px) saturate(140%);
+      -webkit-backdrop-filter: blur(12px) saturate(140%);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 2px;
+      font: 800 11px/1 var(--gun-mono);
+      letter-spacing: 0.10em; color: var(--gun-fg);
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      pointer-events: auto;
+      transition: transform .08s ease, background .15s ease;
+    }
+    #mobileButtons .mbtn .label-sm {
+      font-size: 8px; letter-spacing: 0.14em;
+      color: var(--gun-fg-dim); font-weight: 700;
+    }
+    #mobileButtons .mbtn:active { transform: scale(0.92); background: rgba(28, 36, 50, 0.92); }
+
+    body.paused #mobileFire, body.paused #mobileButtons { display: none !important; }
+
     /* Paused state — hide all in-game HUD so splash reads cleanly */
     body.paused #gunHud,
     body.paused #gunCrosshair,
@@ -402,6 +474,29 @@ export function injectHUD() {
   ps.id = 'perfStats';
   ps.textContent = 'FPS — · CALLS — · TRIS —';
   document.body.appendChild(ps);
+
+  // ----- Touch / mobile UI (visible only on coarse-pointer devices via CSS) -----
+  const fire = document.createElement('div');
+  fire.id = 'mobileFire';
+  fire.setAttribute('role', 'button');
+  fire.setAttribute('aria-label', 'Fire');
+  fire.textContent = 'FIRE';
+  document.body.appendChild(fire);
+
+  const mbs = document.createElement('div');
+  mbs.id = 'mobileButtons';
+  mbs.innerHTML = `
+    <div class="mbtn" id="mobileWeapon" role="button" aria-label="Switch weapon">
+      <span class="label-sm">GUN</span><span id="mobileWeaponName">PISTOL</span>
+    </div>
+    <div class="mbtn" id="mobileCamera" role="button" aria-label="Switch camera">
+      <span class="label-sm">CAM</span><span id="mobileCameraName">CHASE</span>
+    </div>
+    <div class="mbtn" id="mobilePause" role="button" aria-label="Pause">
+      <span class="label-sm">⏸</span><span>PAUSE</span>
+    </div>
+  `;
+  document.body.appendChild(mbs);
 }
 
 export function setArmed(on) {
