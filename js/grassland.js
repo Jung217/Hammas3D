@@ -61,10 +61,10 @@ const CAMERA_MODES = [
 ];
 const FPS_CAM_HEIGHT     = 0.65;        // camera at hamster head height in first-person
 const FPS_TURN_RATE      = 2.6;         // radians/sec — A/D turn speed when in FPS
-const TOPDOWN_CAM_HEIGHT = 70;          // default straight-up height in top-down view
-const TOPDOWN_HEIGHT_MIN = 28;
-const TOPDOWN_HEIGHT_MAX = 160;
-const TOPDOWN_ZOOM_STEP  = 0.06;        // multiplier per wheel delta unit
+const TOPDOWN_CAM_HEIGHT = 55;          // default straight-up height in top-down view (was 70)
+const TOPDOWN_HEIGHT_MIN = 10;          // can zoom right down to the player (was 28)
+const TOPDOWN_HEIGHT_MAX = 180;         // bigger ceiling so wheel still has range up too
+const TOPDOWN_ZOOM_STEP  = 0.05;        // slightly finer step for smoother zoom
 
 // ============================================================
 //   Game
@@ -160,9 +160,10 @@ class Game {
       // Hover near the top-left corner reveals the BACK pill (per plan §HUD)
       // Hides again ~700 ms after cursor leaves the corner zone, unless paused
       this._backHoverTimer = null;
+      // Hover zone shrunk to a small corner so it doesn't overlap the weapon pill
       window.addEventListener('mousemove', (e) => {
         if (this.paused) return; // already showing via setPaused
-        const inHotZone = (e.clientX < 88 && e.clientY < 88);
+        const inHotZone = (e.clientX < 38 && e.clientY < 38);
         if (inHotZone) {
           this.backPill.classList.add('show');
           if (this._backHoverTimer) { clearTimeout(this._backHoverTimer); this._backHoverTimer = null; }

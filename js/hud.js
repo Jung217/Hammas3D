@@ -62,7 +62,7 @@ export function injectHUD() {
     }
 
     #gunHud {
-      position: fixed; bottom: 14px; left: 14px;
+      position: fixed; bottom: 14px; right: 14px;
       display: flex; gap: 14px; padding: 10px 16px;
       background: var(--gun-bg);
       backdrop-filter: blur(14px) saturate(140%);
@@ -223,9 +223,9 @@ export function injectHUD() {
       margin: 0 4px;
     }
 
-    /* Weapon pill (top-right) — shows current weapon + key, color tints to weapon */
+    /* Weapon pill (top-left) — shows current weapon + key, color tints to weapon */
     #weaponPill {
-      position: fixed; top: 14px; right: 14px;
+      position: fixed; top: 14px; left: 14px;
       display: inline-flex; align-items: center; gap: 8px;
       padding: 7px 14px 7px 7px;
       background: var(--gun-bg);
@@ -259,7 +259,7 @@ export function injectHUD() {
 
     /* Perf overlay (F3 / backtick to toggle) — FPS · draw calls · triangles */
     #perfStats {
-      position: fixed; bottom: 14px; right: 14px;
+      position: fixed; bottom: 14px; left: 14px;
       padding: 6px 12px;
       background: rgba(12, 16, 24, 0.78);
       backdrop-filter: blur(10px);
@@ -277,9 +277,9 @@ export function injectHUD() {
     #perfStats.show { display: block; }
     body.paused #perfStats { display: none !important; }
 
-    /* Camera mode pill (top-right under weapon pill) */
+    /* Camera mode pill (top-left under weapon pill) */
     #cameraPill {
-      position: fixed; top: 56px; right: 14px;
+      position: fixed; top: 56px; left: 14px;
       display: inline-flex; align-items: center; gap: 8px;
       padding: 6px 12px 6px 6px;
       background: var(--gun-bg);
