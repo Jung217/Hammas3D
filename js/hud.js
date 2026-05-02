@@ -313,17 +313,40 @@ export function injectHUD() {
        Mobile / touch controls — visible only on touch-capable devices
        (coarse pointer = phone/tablet; mouse devices keep desktop layout)
        =========================================================== */
-    #mobileFire, #mobileButtons { display: none; }
+    #mobileFire, #joystick { display: none; }
     @media (pointer: coarse) {
-      #mobileFire   { display: flex; }
-      #mobileButtons { display: flex; }
-      /* Bigger tap targets for the existing pills on touch screens */
-      #weaponPill, #cameraPill, #backPill { font-size: 13px; padding-top: 10px; padding-bottom: 10px; }
+      #mobileFire { display: flex; }
+      #joystick   { display: block; }
+
+      /* Make the existing top-left pills tappable on mobile + bigger hit area */
+      #weaponPill, #cameraPill {
+        pointer-events: auto !important;
+        cursor: pointer;
+        font-size: 13px;
+        padding-top: 10px; padding-bottom: 10px;
+      }
+      #weaponPill:active, #cameraPill:active { transform: scale(0.95); }
+
+      /* Pull the camera pill further down so it doesn't kiss the weapon pill on mobile */
+      #cameraPill { top: 70px; }
+
+      /* BACK pill: always visible on mobile, parked top-right out of the weapon pill's way */
+      #backPill {
+        display: inline-flex !important;
+        left: auto; right: 14px; top: 14px;
+      }
+
+      /* Stats card moves to top-right (under the BACK pill) so the bottom-right
+         is free for the FIRE button without overlap */
+      #gunHud { bottom: auto; right: 14px; top: 64px; left: auto; }
+
+      /* Hide the perf overlay on mobile (no F3 to toggle anyway) */
+      #perfStats { display: none !important; }
     }
 
-    /* Big circular FIRE button — bottom-right, primary action */
+    /* Big circular FIRE button — bottom-right, shrinks in CHASE / TOP to give the joystick more space */
     #mobileFire {
-      position: fixed; bottom: 28px; right: 24px;
+      position: fixed; bottom: 30px; right: 26px;
       width: 92px; height: 92px;
       border-radius: 50%;
       background: rgba(255, 58, 79, 0.55);
@@ -338,7 +361,8 @@ export function injectHUD() {
       touch-action: none;
       pointer-events: auto;
       z-index: 99999;
-      transition: background .12s ease, transform .08s ease;
+      transition: background .12s ease, transform .08s ease,
+                  width .18s ease, height .18s ease, font-size .18s ease;
     }
     #mobileFire.firing {
       background: rgba(255, 58, 79, 0.92);
@@ -346,40 +370,52 @@ export function injectHUD() {
       box-shadow: 0 6px 18px rgba(255, 58, 79, 0.65),
                   inset 0 0 24px rgba(255, 255, 255, 0.25);
     }
+    /* Smaller fire button in chase / top-down where the joystick is doing the steering */
+    @media (pointer: coarse) {
+      body.cam-chase #mobileFire, body.cam-top #mobileFire {
+        width: 66px; height: 66px;
+        font-size: 12px;
+      }
+    }
 
-    /* Small button column — left side, easier for left thumb in landscape */
-    #mobileButtons {
-      position: fixed; bottom: 30px; left: 16px;
-      flex-direction: column; gap: 12px;
-      align-items: flex-start;
+    /* Joystick — floating circular base with a draggable inner stick (left thumb) */
+    #joystick {
+      position: fixed; bottom: 30px; left: 30px;
+      width: 120px; height: 120px;
       z-index: 99999;
-      pointer-events: none;
-    }
-    #mobileButtons .mbtn {
-      width: 64px; height: 56px;
-      border-radius: 28px;
-      background: rgba(12, 16, 24, 0.78);
-      backdrop-filter: blur(12px) saturate(140%);
-      -webkit-backdrop-filter: blur(12px) saturate(140%);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
-      display: flex; align-items: center; justify-content: center;
-      flex-direction: column; gap: 2px;
-      font: 800 11px/1 var(--gun-mono);
-      letter-spacing: 0.10em; color: var(--gun-fg);
-      user-select: none;
-      -webkit-tap-highlight-color: transparent;
-      touch-action: manipulation;
       pointer-events: auto;
-      transition: transform .08s ease, background .15s ease;
+      touch-action: none;
+      user-select: none;
     }
-    #mobileButtons .mbtn .label-sm {
-      font-size: 8px; letter-spacing: 0.14em;
-      color: var(--gun-fg-dim); font-weight: 700;
+    #joystickBase {
+      position: absolute; inset: 0;
+      border-radius: 50%;
+      background: rgba(12, 16, 24, 0.42);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 2px solid rgba(255, 255, 255, 0.20);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.40),
+                  inset 0 0 22px rgba(255, 255, 255, 0.04);
     }
-    #mobileButtons .mbtn:active { transform: scale(0.92); background: rgba(28, 36, 50, 0.92); }
+    #joystickStick {
+      position: absolute; left: 50%; top: 50%;
+      width: 52px; height: 52px;
+      margin: -26px 0 0 -26px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.36);
+      border: 2px solid rgba(255, 255, 255, 0.55);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42);
+      pointer-events: none;
+      transition: transform .07s ease;
+    }
+    /* In FPS the joystick is locked to the X axis only — visual cue: faded vertical bands */
+    body.cam-fps #joystickBase {
+      background:
+        linear-gradient(0deg, transparent 38%, rgba(255,255,255,0.06) 38%, rgba(255,255,255,0.06) 62%, transparent 62%),
+        rgba(12, 16, 24, 0.42);
+    }
 
-    body.paused #mobileFire, body.paused #mobileButtons { display: none !important; }
+    body.paused #mobileFire, body.paused #joystick { display: none !important; }
 
     /* Paused state — hide all in-game HUD so splash reads cleanly */
     body.paused #gunHud,
@@ -483,20 +519,11 @@ export function injectHUD() {
   fire.textContent = 'FIRE';
   document.body.appendChild(fire);
 
-  const mbs = document.createElement('div');
-  mbs.id = 'mobileButtons';
-  mbs.innerHTML = `
-    <div class="mbtn" id="mobileWeapon" role="button" aria-label="Switch weapon">
-      <span class="label-sm">GUN</span><span id="mobileWeaponName">PISTOL</span>
-    </div>
-    <div class="mbtn" id="mobileCamera" role="button" aria-label="Switch camera">
-      <span class="label-sm">CAM</span><span id="mobileCameraName">CHASE</span>
-    </div>
-    <div class="mbtn" id="mobilePause" role="button" aria-label="Pause">
-      <span class="label-sm">⏸</span><span>PAUSE</span>
-    </div>
-  `;
-  document.body.appendChild(mbs);
+  const joy = document.createElement('div');
+  joy.id = 'joystick';
+  joy.setAttribute('aria-label', 'Steering joystick');
+  joy.innerHTML = `<div id="joystickBase"></div><div id="joystickStick"></div>`;
+  document.body.appendChild(joy);
 }
 
 export function setArmed(on) {

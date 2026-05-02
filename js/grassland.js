@@ -172,6 +172,12 @@ class Game {
     this.velocity = new THREE.Vector3();
     this.playerYawTarget = 0;
 
+    // Touch device flag — once set, aim follows player facing instead of mouse cursor
+    this._isTouch = (typeof window !== 'undefined') && (
+      ('ontouchstart' in window) ||
+      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
+    );
+
     // Weapon system
     this.currentWeapon = 0;
     this._tracers = []; // { mesh, mat, geom, life, born }
@@ -205,10 +211,8 @@ class Game {
     this._perfFrames = 0;
     this._perfLastUpdate = performance.now();
 
-    // ---- Mobile / touch UI wiring ----
-    this.mobileFire        = document.getElementById('mobileFire');
-    this.mobileWeaponLabel = document.getElementById('mobileWeaponName');
-    this.mobileCameraLabel = document.getElementById('mobileCameraName');
+    // ---- Touch UI wiring ----
+    this.mobileFire = document.getElementById('mobileFire');
     if (this.mobileFire) {
       const fireOn = (e) => {
         e.preventDefault();
@@ -227,21 +231,63 @@ class Game {
       this.mobileFire.addEventListener('pointercancel', fireOff);
       this.mobileFire.addEventListener('pointerleave',  fireOff);
     }
-    document.getElementById('mobileWeapon')?.addEventListener('pointerdown', (e) => {
+    // Make the existing weapon/camera pills tappable on touch devices (CSS enables pointer-events)
+    document.getElementById('weaponPill')?.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       this._setWeapon((this.currentWeapon + 1) % WEAPONS.length);
     });
-    document.getElementById('mobileCamera')?.addEventListener('pointerdown', (e) => {
+    document.getElementById('cameraPill')?.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       this._setCameraMode((this.cameraMode + 1) % CAMERA_MODES.length);
     });
-    document.getElementById('mobilePause')?.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      this.setPaused(!this.paused);
-    });
-    // Make sure initial labels match the first weapon/camera
-    if (this.mobileWeaponLabel) this.mobileWeaponLabel.textContent = WEAPONS[0].name;
-    if (this.mobileCameraLabel) this.mobileCameraLabel.textContent = CAMERA_MODES[0].name;
+
+    // ---- Joystick (mobile only — hidden by CSS on desktop) ----
+    this._joystick = { active: false, pointerId: null, vec: { x: 0, y: 0 }, cx: 0, cy: 0 };
+    const joy   = document.getElementById('joystick');
+    const stick = document.getElementById('joystickStick');
+    const base  = document.getElementById('joystickBase');
+    if (joy && stick && base) {
+      const JOY_MAX = 38; // max stick travel from center, in px
+      const apply = (cx, cy) => {
+        const isFps = (this.cameraMode === 1);
+        // FPS clamps the stick to the horizontal axis
+        if (isFps) cy = 0;
+        let len = Math.hypot(cx, cy);
+        if (len > JOY_MAX) {
+          const k = JOY_MAX / len;
+          cx *= k; cy *= k; len = JOY_MAX;
+        }
+        stick.style.transform = `translate(${cx}px, ${cy}px)`;
+        this._joystick.vec.x = cx / JOY_MAX;
+        this._joystick.vec.y = cy / JOY_MAX;
+      };
+      joy.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (this.paused) return;
+        try { joy.setPointerCapture(e.pointerId); } catch (_) {}
+        this._joystick.pointerId = e.pointerId;
+        this._joystick.active = true;
+        const r = base.getBoundingClientRect();
+        this._joystick.cx = r.left + r.width / 2;
+        this._joystick.cy = r.top  + r.height / 2;
+        apply(e.clientX - this._joystick.cx, e.clientY - this._joystick.cy);
+      });
+      joy.addEventListener('pointermove', (e) => {
+        if (!this._joystick.active || e.pointerId !== this._joystick.pointerId) return;
+        e.preventDefault();
+        apply(e.clientX - this._joystick.cx, e.clientY - this._joystick.cy);
+      });
+      const release = (e) => {
+        if (e.pointerId !== this._joystick.pointerId) return;
+        this._joystick.active = false;
+        this._joystick.pointerId = null;
+        this._joystick.vec.x = 0;
+        this._joystick.vec.y = 0;
+        stick.style.transform = 'translate(0px, 0px)';
+      };
+      joy.addEventListener('pointerup',     release);
+      joy.addEventListener('pointercancel', release);
+    }
 
     if (this.backPill) {
       const pause = () => this.setPaused(true);
@@ -318,7 +364,7 @@ class Game {
       if (performance.now() < this.gateUntil) return; // splash → game leak guard
       // Don't fire when the user taps any UI element (mobile buttons, pills, splash, etc.)
       if (e.target && e.target.closest && e.target.closest(
-        '#mobileFire, #mobileButtons, #weaponPill, #cameraPill, #backPill, #pauseHint, #splash, #playBtn'
+        '#mobileFire, #joystick, #weaponPill, #cameraPill, #backPill, #pauseHint, #splash, #playBtn'
       )) return;
       this.firing = true;
       onMove(e); // make sure aim follows the touch point on first contact
@@ -368,6 +414,30 @@ class Game {
   }
 
   _updateAim() {
+    // On touch devices the joystick steers the player; aim point becomes a fixed
+    // distance in front of the avatar in its facing direction. Crosshair tracks that.
+    if (this._isTouch) {
+      const fwdX = Math.sin(this.player.rotation.y);
+      const fwdZ = Math.cos(this.player.rotation.y);
+      this.aimWorld.set(
+        this.player.position.x + fwdX * 12,
+        0,
+        this.player.position.z + fwdZ * 12,
+      );
+      // Project to NDC so shooting raycast and DOM crosshair both use it
+      const v = this.aimWorld.clone();
+      v.y = 0.5;
+      v.project(this.camera);
+      this.aimNDC.x = v.x;
+      this.aimNDC.y = v.y;
+      const cross = document.getElementById('gunCrosshair');
+      if (cross) {
+        cross.style.left = ((v.x * 0.5 + 0.5) * window.innerWidth) + 'px';
+        cross.style.top  = ((-v.y * 0.5 + 0.5) * window.innerHeight) + 'px';
+      }
+      return;
+    }
+    // Desktop: existing pointer → ground projection
     this.aimNDC.x = (this.pointer.x / window.innerWidth) * 2 - 1;
     this.aimNDC.y = -(this.pointer.y / window.innerHeight) * 2 + 1;
     this.raycaster.setFromCamera(this.aimNDC, this.camera);
@@ -378,6 +448,7 @@ class Game {
   _updatePlayer(dt) {
     const k = this.keys;
     const isFPS = (this.cameraMode === 1);
+    const joy = this._joystick;
 
     // Input mapping — A/D mean different things by camera mode:
     //   FPS  : A/D rotate the hamster left/right (mouse must NOT steer or it's nausea-cam)
@@ -385,6 +456,28 @@ class Game {
     let strafe = 0, turn = 0;
     if (k.has('a') || k.has('arrowleft'))  { if (isFPS) turn -= 1; else strafe -= 1; }
     if (k.has('d') || k.has('arrowright')) { if (isFPS) turn += 1; else strafe += 1; }
+
+    // Joystick: replaces mouse-steer (CHASE/TOP) and adds to turn (FPS)
+    let joyDriven = false;
+    if (joy && joy.active) {
+      const jx = joy.vec.x;
+      const jy = joy.vec.y;
+      const jlen = Math.hypot(jx, jy);
+      if (isFPS) {
+        // FPS: only horizontal — joystick X adds to A/D-style turn input
+        turn += jx;
+      } else if (jlen > 0.08) {
+        // CHASE / TOP: joystick angle (camera-relative) becomes player heading target
+        // Screen "up" (jy < 0) is forward away from camera in world XZ
+        const sx = jx, sz = -jy;
+        const c = Math.cos(this.cameraYaw), s = Math.sin(this.cameraYaw);
+        const wx = sx * c - sz * s;
+        const wz = sx * s + sz * c;
+        const heading = Math.atan2(wz, wx);
+        this.playerYawTarget = -heading + Math.PI / 2;
+        joyDriven = true;
+      }
+    }
 
     // FPS turn — directly nudge the yaw target; smooth lerp at the bottom does the easing
     if (isFPS && turn !== 0) {
@@ -414,8 +507,9 @@ class Game {
     if (this.player.position.z >  HALF_WORLD - 1.5) { this.player.position.z =  HALF_WORLD - 1.5; if (this.velocity.z > 0) this.velocity.z = 0; }
     if (this.player.position.z < -HALF_WORLD + 1.5) { this.player.position.z = -HALF_WORLD + 1.5; if (this.velocity.z < 0) this.velocity.z = 0; }
 
-    // Yaw target — mouse-steers ONLY in non-FPS modes. FPS keeps the locked heading.
-    if (!isFPS) {
+    // Yaw target — desktop only: mouse cursor's ground projection drives facing.
+    // Touch devices steer via the joystick (handled above) or just keep the locked heading.
+    if (!isFPS && !this._isTouch && !joyDriven) {
       const dx = this.aimWorld.x - this.player.position.x;
       const dz = this.aimWorld.z - this.player.position.z;
       if (dx * dx + dz * dz > 0.0004) {
@@ -489,7 +583,9 @@ class Game {
       if (k) k.textContent = m.key;
       if (n) n.textContent = m.name;
     }
-    if (this.mobileCameraLabel) this.mobileCameraLabel.textContent = m.name;
+    // Body class drives mobile-only CSS (fire button shrinks in chase/top, joystick visual hint in FPS)
+    document.body.classList.remove('cam-chase', 'cam-fps', 'cam-top');
+    document.body.classList.add(['cam-chase', 'cam-fps', 'cam-top'][idx]);
     // Visibility: in FPS hide our own body/shadow so we don't see the inside of the hamster
     const isFPS = (idx === 1);
     if (this.playerBody)   this.playerBody.visible   = !isFPS;
@@ -521,7 +617,6 @@ class Game {
       this.weaponPill.style.setProperty('--weapon-color', `rgb(${r},${g},${b})`);
       this.weaponPill.style.setProperty('--weapon-glow',  `rgba(${r},${g},${b},0.55)`);
     }
-    if (this.mobileWeaponLabel) this.mobileWeaponLabel.textContent = w.name;
   }
 
   _tryFire(now) {
