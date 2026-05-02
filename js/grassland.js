@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   WORLD_SIZE, HALF_WORLD,
   buildWorld, buildPlayerAvatar,
+  mergeBoxes,
 } from './world.js';
 import { Swarm } from './swarm.js';
 import {
@@ -45,11 +46,55 @@ const PLAYER_ACCEL_LERP   = 5.0;  // per-second factor — smooth approach to ta
 const PLAYER_YAW_LERP     = 9.0;  // per-second factor for facing-aim rotation
 
 // Weapons — switch with 1/2/3/4 number keys
+//   range    : max distance a bullet travels — beyond this, hits don't register and the
+//              tracer still draws but stops at the range limit
+//   muzzleZ  : player-local Z position of the muzzle flash group (= gun_pos.z + barrel tip)
+//   gunBoxes : voxel layout for the player avatar's gun model (swapped on weapon change)
 const WEAPONS = [
-  { name: 'PISTOL',  key: '1', fireMs:  90, spread: 0.000, pellets: 1, color: 0xffd84a, width: 0.05, life: 50,  pierce: false },
-  { name: 'SMG',     key: '2', fireMs:  55, spread: 0.025, pellets: 1, color: 0x6cf0ff, width: 0.04, life: 45,  pierce: false },
-  { name: 'SHOTGUN', key: '3', fireMs: 600, spread: 0.110, pellets: 8, color: 0xff8a3a, width: 0.06, life: 80,  pierce: false },
-  { name: 'SNIPER',  key: '4', fireMs: 1100, spread: 0.000, pellets: 1, color: 0xe8f0ff, width: 0.08, life: 130, pierce: true  },
+  {
+    name: 'PISTOL',  key: '1', fireMs:  90,  spread: 0.000, pellets: 1,
+    color: 0xffd84a, width: 0.05, life: 50,  pierce: false,
+    range: 36, muzzleZ: 1.05,
+    gunBoxes: [
+      { size: [0.10, 0.10, 0.45], pos: [0, 0.04, 0.25],  color: [0.10, 0.10, 0.12] }, // slide
+      { size: [0.10, 0.18, 0.18], pos: [0, -0.06, 0.08], color: [0.12, 0.12, 0.14] }, // grip
+    ],
+  },
+  {
+    name: 'SMG',     key: '2', fireMs:  55,  spread: 0.025, pellets: 1,
+    color: 0x6cf0ff, width: 0.04, life: 45,  pierce: false,
+    range: 28, muzzleZ: 1.16,
+    gunBoxes: [
+      { size: [0.10, 0.10, 0.55], pos: [0, 0.05, 0.32],  color: [0.16, 0.16, 0.20] }, // barrel
+      { size: [0.11, 0.18, 0.22], pos: [0, -0.04, 0.08], color: [0.10, 0.10, 0.13] }, // receiver
+      { size: [0.08, 0.18, 0.10], pos: [0, -0.20, 0.06], color: [0.20, 0.20, 0.24] }, // magazine
+      { size: [0.10, 0.05, 0.12], pos: [0, 0.13, 0.16],  color: [0.18, 0.18, 0.22] }, // top rail
+    ],
+  },
+  {
+    name: 'SHOTGUN', key: '3', fireMs: 600,  spread: 0.110, pellets: 8,
+    color: 0xff8a3a, width: 0.06, life: 80,  pierce: false,
+    range: 14, muzzleZ: 1.24,
+    gunBoxes: [
+      { size: [0.10, 0.05, 0.65], pos: [0, 0.08, 0.37],  color: [0.16, 0.13, 0.10] }, // upper barrel
+      { size: [0.10, 0.05, 0.65], pos: [0, 0.02, 0.37],  color: [0.16, 0.13, 0.10] }, // lower barrel
+      { size: [0.10, 0.16, 0.18], pos: [0, -0.04, 0.10], color: [0.30, 0.20, 0.12] }, // wooden receiver
+      { size: [0.09, 0.10, 0.20], pos: [0, -0.12, -0.06], color: [0.40, 0.27, 0.16] }, // wooden stock
+    ],
+  },
+  {
+    name: 'SNIPER',  key: '4', fireMs: 1100, spread: 0.000, pellets: 1,
+    color: 0xe8f0ff, width: 0.08, life: 130, pierce: true,
+    range: 110, muzzleZ: 1.44,
+    gunBoxes: [
+      { size: [0.06, 0.06, 0.85], pos: [0, 0.05, 0.47],  color: [0.08, 0.08, 0.10] }, // long thin barrel
+      { size: [0.08, 0.16, 0.20], pos: [0, -0.04, 0.10], color: [0.18, 0.14, 0.10] }, // wooden receiver
+      { size: [0.08, 0.10, 0.22], pos: [0, -0.12, -0.05], color: [0.30, 0.20, 0.12] }, // wooden stock
+      { size: [0.05, 0.05, 0.22], pos: [0, 0.14, 0.18],  color: [0.10, 0.10, 0.12] }, // scope tube
+      { size: [0.07, 0.07, 0.06], pos: [0, 0.14, 0.09],  color: [0.05, 0.05, 0.08] }, // scope eyepiece
+      { size: [0.07, 0.07, 0.06], pos: [0, 0.14, 0.27],  color: [0.05, 0.05, 0.08] }, // scope objective
+    ],
+  },
 ];
 const MUZZLE_FLASH_MS = 90;
 
@@ -88,6 +133,16 @@ class Game {
     this.scene.add(this.player);
     this.muzzleMesh = this.player.getObjectByName('playerMuzzle');
     this.muzzleFiredAt = 0;
+
+    // Per-weapon gun voxel geometries — built once, swapped on weapon change
+    this._gunGeoms = WEAPONS.map(w => mergeBoxes(w.gunBoxes));
+    this._playerGun = new THREE.Mesh(
+      this._gunGeoms[0],
+      new THREE.MeshLambertMaterial({ vertexColors: true }),
+    );
+    this._playerGun.position.set(0.30, 0.40, 0.55);
+    this._playerGun.name = 'playerGun';
+    this.player.add(this._playerGun);
 
     this.swarm = new Swarm(this.scene, NPC_COUNT, this._tufts);
 
@@ -400,6 +455,13 @@ class Game {
     if (this.currentWeapon === idx && this.weaponPill?.querySelector('.weapon-name')?.textContent) return;
     this.currentWeapon = idx;
     const w = WEAPONS[idx];
+    // Swap the player avatar's gun geometry + relocate the muzzle group to the new barrel tip
+    if (this._playerGun && this._gunGeoms) {
+      this._playerGun.geometry = this._gunGeoms[idx];
+    }
+    if (this.muzzleMesh) {
+      this.muzzleMesh.position.set(0.30, 0.44, w.muzzleZ);
+    }
     if (this.weaponPill) {
       const key  = this.weaponPill.querySelector('.weapon-key');
       const name = this.weaponPill.querySelector('.weapon-name');
@@ -446,7 +508,8 @@ class Game {
     if (this.muzzleMesh) this.muzzleMesh.getWorldPosition(muzzleWorld);
     else muzzleWorld.copy(this.player.position).add(new THREE.Vector3(0, 0.6, 0));
 
-    // Per-pellet ray: jitter NDC by weapon.spread; pierce kills every live hamster on the line
+    // Per-pellet ray: jitter NDC by weapon.spread; raycaster.far enforces weapon.range so
+    // shots beyond the limit don't register and the tracer stops at the range edge
     let anyHit = false;
     let bonkedThisShot = 0;
     for (let p = 0; p < weapon.pellets; p++) {
@@ -455,6 +518,7 @@ class Game {
       const ndcX = this.aimNDC.x + jx;
       const ndcY = this.aimNDC.y + jy;
       this.raycaster.setFromCamera({ x: ndcX, y: ndcY }, this.camera);
+      this.raycaster.far = weapon.range;
       const hits = this.raycaster.intersectObject(this.swarm.mesh, false);
 
       let tracerEnd = null;
@@ -475,8 +539,7 @@ class Game {
           if (!firstAlive) firstAlive = hit.point;
         }
         if (killsThisRay > 0) anyHit = true;
-        // Tracer ends at the FURTHEST kill (so sniper beam reads as full piercing line),
-        // or the first geometric hit when we shot a corpse / sliding hits without kills.
+        // Tracer ends at the FURTHEST kill (sniper piercing line), or first geometric hit
         tracerEnd = (weapon.pierce && killsThisRay > 1) ? hits[hits.length - 1].point
                                                         : (firstAlive || hits[0].point);
 
@@ -493,13 +556,15 @@ class Game {
             this.lastBubbleAt = now;
           }
         }
-      } else {
-        // No hit — startle nearby and project the tracer to the aim point on the ground
-        this.swarm.alertNear(this.aimWorld, now);
-        const r = this.raycaster.ray;
-        tracerEnd = r.origin.clone().add(r.direction.clone().multiplyScalar(80));
       }
 
+      // Always draw a tracer — ends at hit point if we hit something within range,
+      // otherwise stops at the weapon's max range so the player can see how far it reaches
+      if (!tracerEnd) {
+        this.swarm.alertNear(this.aimWorld, now);
+        const r = this.raycaster.ray;
+        tracerEnd = r.origin.clone().add(r.direction.clone().multiplyScalar(weapon.range));
+      }
       this._spawnTracer(muzzleWorld, tracerEnd, weapon.color, weapon.width, weapon.life);
     }
 

@@ -125,15 +125,9 @@ export function buildPlayerAvatar() {
   body.name = 'playerBody';
   root.add(body);
 
-  // Tiny "gun" sticking out front-right
-  const gunGeom = mergeBoxes([
-    { size: [0.10, 0.10, 0.45], pos: [0, 0.04, 0.25], color: [0.10, 0.10, 0.12] },
-    { size: [0.10, 0.18, 0.18], pos: [0, -0.06, 0.08], color: [0.12, 0.12, 0.14] },
-  ]);
-  const gun = new THREE.Mesh(gunGeom, new THREE.MeshLambertMaterial({ vertexColors: true }));
-  gun.position.set(0.30, 0.40, 0.55);
-  gun.name = 'playerGun';
-  root.add(gun);
+  // The gun mesh ('playerGun') is owned by Game so it can be swapped per-weapon —
+  // see grassland.js Game._setWeapon. The muzzle group below tracks the active gun's
+  // barrel tip via Game-driven repositioning.
 
   // 3D muzzle flash — Group of voxel boxes + a brief PointLight for environmental flash
   const muzzleGroup = new THREE.Group();
