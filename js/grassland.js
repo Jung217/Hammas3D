@@ -319,6 +319,7 @@ class Game {
   setPaused(paused) {
     if (this.paused === paused) return;
     this.paused = paused;
+    const playBtn = document.getElementById('playBtn');
     if (paused) {
       this.firing = false;
       this.keys.clear();
@@ -328,6 +329,8 @@ class Game {
       document.body.classList.add('paused');
       const splash = document.getElementById('splash');
       if (splash) splash.classList.remove('hide');
+      // Splash button reads "RESUME" while a paused game exists (no Esc on touch)
+      if (playBtn) playBtn.textContent = 'RESUME';
     } else {
       this.backPill?.classList.remove('show');
       this.pauseHint?.classList.remove('show');
@@ -414,8 +417,8 @@ class Game {
   }
 
   _updateAim() {
-    // On touch devices the joystick steers the player; aim point becomes a fixed
-    // distance in front of the avatar in its facing direction. Crosshair tracks that.
+    // Touch: bullets fire in the player's facing direction (no on-screen cursor).
+    // Aim point = 12 units in front of the avatar, projected back to NDC for the raycast.
     if (this._isTouch) {
       const fwdX = Math.sin(this.player.rotation.y);
       const fwdZ = Math.cos(this.player.rotation.y);
@@ -424,17 +427,12 @@ class Game {
         0,
         this.player.position.z + fwdZ * 12,
       );
-      // Project to NDC so shooting raycast and DOM crosshair both use it
       const v = this.aimWorld.clone();
       v.y = 0.5;
       v.project(this.camera);
       this.aimNDC.x = v.x;
       this.aimNDC.y = v.y;
-      const cross = document.getElementById('gunCrosshair');
-      if (cross) {
-        cross.style.left = ((v.x * 0.5 + 0.5) * window.innerWidth) + 'px';
-        cross.style.top  = ((-v.y * 0.5 + 0.5) * window.innerHeight) + 'px';
-      }
+      // Crosshair is hidden on mobile via CSS — no need to update its DOM position
       return;
     }
     // Desktop: existing pointer → ground projection
@@ -457,18 +455,19 @@ class Game {
     if (k.has('a') || k.has('arrowleft'))  { if (isFPS) turn -= 1; else strafe -= 1; }
     if (k.has('d') || k.has('arrowright')) { if (isFPS) turn += 1; else strafe += 1; }
 
-    // Joystick: replaces mouse-steer (CHASE/TOP) and adds to turn (FPS)
+    // Joystick: replaces mouse-steer (CHASE/TOP) and adds to turn (FPS).
+    // Both axes are negated so pulling the stick toward a screen direction makes the
+    // player face / turn that way (matches phone-game convention).
     let joyDriven = false;
     if (joy && joy.active) {
-      const jx = joy.vec.x;
-      const jy = joy.vec.y;
+      const jx = -joy.vec.x;     // flip X — pull left → turn left
+      const jy = -joy.vec.y;     // flip Y — pull up → walk forward (away from camera)
       const jlen = Math.hypot(jx, jy);
       if (isFPS) {
         // FPS: only horizontal — joystick X adds to A/D-style turn input
         turn += jx;
       } else if (jlen > 0.08) {
         // CHASE / TOP: joystick angle (camera-relative) becomes player heading target
-        // Screen "up" (jy < 0) is forward away from camera in world XZ
         const sx = jx, sz = -jy;
         const c = Math.cos(this.cameraYaw), s = Math.sin(this.cameraYaw);
         const wx = sx * c - sz * s;

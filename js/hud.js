@@ -62,7 +62,8 @@ export function injectHUD() {
     }
 
     #gunHud {
-      position: fixed; bottom: 14px; right: 14px;
+      position: fixed; bottom: 14px; left: 50%;
+      transform: translateX(-50%);
       display: flex; gap: 14px; padding: 10px 16px;
       background: var(--gun-bg);
       backdrop-filter: blur(14px) saturate(140%);
@@ -336,12 +337,14 @@ export function injectHUD() {
         left: auto; right: 14px; top: 14px;
       }
 
-      /* Stats card moves to top-right (under the BACK pill) so the bottom-right
-         is free for the FIRE button without overlap */
-      #gunHud { bottom: auto; right: 14px; top: 64px; left: auto; }
-
       /* Hide the perf overlay on mobile (no F3 to toggle anyway) */
       #perfStats { display: none !important; }
+
+      /* Hide the crosshair on mobile — player auto-aims forward, joystick = direction control */
+      #gunCrosshair { display: none !important; }
+
+      /* Hide the keyboard-flavoured pause hint — splash + RESUME button is the resume UX on touch */
+      #pauseHint { display: none !important; }
     }
 
     /* Big circular FIRE button — bottom-right, shrinks in CHASE / TOP to give the joystick more space */
