@@ -172,11 +172,19 @@ class Game {
     this.velocity = new THREE.Vector3();
     this.playerYawTarget = 0;
 
-    // Touch device flag — once set, aim follows player facing instead of mouse cursor
+    // Touch device flag — once set, aim follows joystick-panned cursor instead of mouse
     this._isTouch = (typeof window !== 'undefined') && (
       ('ontouchstart' in window) ||
       (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
     );
+
+    // Virtual cursor for touch CHASE/TOP — joystick pans this around the screen,
+    // crosshair tracks it, aim raycast comes from it (so aim ≠ facing direction).
+    this._touchCursor = {
+      x: window.innerWidth  / 2,
+      y: window.innerHeight / 2,
+    };
+    this._touchCursorSpeed = 700; // px / sec at full joystick deflection
 
     // Weapon system
     this.currentWeapon = 0;
@@ -344,6 +352,11 @@ class Game {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
+    // Keep the touch cursor inside the new viewport
+    if (this._touchCursor) {
+      this._touchCursor.x = Math.min(this._touchCursor.x, window.innerWidth);
+      this._touchCursor.y = Math.min(this._touchCursor.y, window.innerHeight);
+    }
   }
 
   // Desktop: mouse + keyboard. Touch devices get the pointer-event branch + on-screen
@@ -416,13 +429,11 @@ class Game {
     });
   }
 
-  _updateAim() {
-    // Touch: bullets fire in the player's facing direction.
-    // Crosshair stays on-screen at all times (FPS = pinned center · CHASE/TOP = clamped).
+  _updateAim(dt) {
     if (this._isTouch) {
       const cross = document.getElementById('gunCrosshair');
       if (this.cameraMode === 1) {
-        // FPS — aim straight forward via NDC center, crosshair locked to screen center
+        // FPS — aim straight forward, crosshair pinned to screen center
         this.aimNDC.x = 0;
         this.aimNDC.y = 0;
         this.raycaster.setFromCamera(this.aimNDC, this.camera);
@@ -434,25 +445,29 @@ class Game {
         }
         return;
       }
-      // CHASE / TOP — project player-forward to NDC; bullet uses raw NDC, crosshair clamps to edge
-      const fwdX = Math.sin(this.player.rotation.y);
-      const fwdZ = Math.cos(this.player.rotation.y);
-      this.aimWorld.set(
-        this.player.position.x + fwdX * 12,
-        0,
-        this.player.position.z + fwdZ * 12,
-      );
-      const v = this.aimWorld.clone();
-      v.y = 0.5;
-      v.project(this.camera);
-      this.aimNDC.x = v.x;
-      this.aimNDC.y = v.y;
+      // CHASE / TOP — joystick pans the virtual crosshair across the screen;
+      // aim raycast comes from the crosshair, so player can aim anywhere visible
+      // (not locked to facing direction). Player still rotates to face aim — handled in _updatePlayer.
+      if (this._joystick && this._joystick.active) {
+        const step = (dt || 0.016) * this._touchCursorSpeed;
+        this._touchCursor.x += this._joystick.vec.x * step;
+        this._touchCursor.y += this._joystick.vec.y * step;
+      }
+      // Clamp inside the viewport with a small margin
+      const M = 16;
+      this._touchCursor.x = Math.max(M, Math.min(window.innerWidth  - M, this._touchCursor.x));
+      this._touchCursor.y = Math.max(M, Math.min(window.innerHeight - M, this._touchCursor.y));
+
+      // NDC + world-space aim from cursor position
+      this.aimNDC.x = (this._touchCursor.x / window.innerWidth) * 2 - 1;
+      this.aimNDC.y = -(this._touchCursor.y / window.innerHeight) * 2 + 1;
+      this.raycaster.setFromCamera(this.aimNDC, this.camera);
+      const hit = this.raycaster.ray.intersectPlane(GROUND_PLANE, this.aimWorld);
+      if (!hit) this.aimWorld.set(this.player.position.x, 0, this.player.position.z + 1);
+
       if (cross) {
-        const M = 0.92; // keep crosshair a touch inside the edges so it doesn't get clipped
-        const cx = Math.max(-M, Math.min(M, v.x));
-        const cy = Math.max(-M, Math.min(M, v.y));
-        cross.style.left = ((cx * 0.5 + 0.5) * window.innerWidth) + 'px';
-        cross.style.top  = ((-cy * 0.5 + 0.5) * window.innerHeight) + 'px';
+        cross.style.left = this._touchCursor.x + 'px';
+        cross.style.top  = this._touchCursor.y + 'px';
       }
       return;
     }
@@ -476,27 +491,12 @@ class Game {
     if (k.has('a') || k.has('arrowleft'))  { if (isFPS) turn -= 1; else strafe -= 1; }
     if (k.has('d') || k.has('arrowright')) { if (isFPS) turn += 1; else strafe += 1; }
 
-    // Joystick: replaces mouse-steer (CHASE/TOP) and adds to turn (FPS).
-    // Both axes are negated so pulling the stick toward a screen direction makes the
-    // player face / turn that way (matches phone-game convention).
-    let joyDriven = false;
-    if (joy && joy.active) {
-      const jx = -joy.vec.x;     // flip X — pull left → turn left
-      const jy = -joy.vec.y;     // flip Y — pull up → walk forward (away from camera)
-      const jlen = Math.hypot(jx, jy);
-      if (isFPS) {
-        // FPS: only horizontal — joystick X adds to A/D-style turn input
-        turn += jx;
-      } else if (jlen > 0.08) {
-        // CHASE / TOP: joystick angle (camera-relative) becomes player heading target
-        const sx = jx, sz = -jy;
-        const c = Math.cos(this.cameraYaw), s = Math.sin(this.cameraYaw);
-        const wx = sx * c - sz * s;
-        const wz = sx * s + sz * c;
-        const heading = Math.atan2(wz, wx);
-        this.playerYawTarget = -heading + Math.PI / 2;
-        joyDriven = true;
-      }
+    // Joystick:
+    //   FPS    : jx adds to A/D-style turn input (negate so pull-left → turn left)
+    //   CHASE/TOP: drives the virtual cursor in _updateAim(); yaw is then derived from
+    //               aimWorld in the block below — same path as desktop mouse aiming
+    if (joy && joy.active && isFPS) {
+      turn += -joy.vec.x;
     }
 
     // FPS turn — directly nudge the yaw target; smooth lerp at the bottom does the easing
@@ -527,9 +527,9 @@ class Game {
     if (this.player.position.z >  HALF_WORLD - 1.5) { this.player.position.z =  HALF_WORLD - 1.5; if (this.velocity.z > 0) this.velocity.z = 0; }
     if (this.player.position.z < -HALF_WORLD + 1.5) { this.player.position.z = -HALF_WORLD + 1.5; if (this.velocity.z < 0) this.velocity.z = 0; }
 
-    // Yaw target — desktop only: mouse cursor's ground projection drives facing.
-    // Touch devices steer via the joystick (handled above) or just keep the locked heading.
-    if (!isFPS && !this._isTouch && !joyDriven) {
+    // Yaw target — derived from aimWorld in CHASE/TOP for both desktop (mouse cursor)
+    // and touch (joystick-panned virtual cursor). FPS keeps locked heading + A/D rotation.
+    if (!isFPS) {
       const dx = this.aimWorld.x - this.player.position.x;
       const dz = this.aimWorld.z - this.player.position.z;
       if (dx * dx + dz * dz > 0.0004) {
@@ -846,7 +846,7 @@ class Game {
       this.renderer.render(this.scene, this.camera);
       return;
     }
-    this._updateAim();
+    this._updateAim(dt);
     this._updatePlayer(dt);
     this._updateCamera(dt);
     this.swarm.tick(dt, now, this.player, this.velocity);
