@@ -340,25 +340,22 @@ export function injectHUD() {
       /* Hide the perf overlay on mobile (no F3 to toggle anyway) */
       #perfStats { display: none !important; }
 
-      /* Hide the crosshair on mobile — player auto-aims forward, joystick = direction control */
-      #gunCrosshair { display: none !important; }
-
       /* Hide the keyboard-flavoured pause hint — splash + RESUME button is the resume UX on touch */
       #pauseHint { display: none !important; }
     }
 
-    /* Big circular FIRE button — bottom-right, shrinks in CHASE / TOP to give the joystick more space */
+    /* Big circular FIRE button — bottom-right (raised so it's not at the very edge),
+       low opacity so it doesn't dominate the view; brightens on press for feedback */
     #mobileFire {
-      position: fixed; bottom: 30px; right: 26px;
+      position: fixed; bottom: 90px; right: 26px;
       width: 92px; height: 92px;
       border-radius: 50%;
-      background: rgba(255, 58, 79, 0.55);
-      border: 3px solid rgba(255, 255, 255, 0.42);
-      box-shadow: 0 10px 28px rgba(255, 58, 79, 0.45),
-                  inset 0 0 18px rgba(255, 255, 255, 0.12);
+      background: rgba(255, 58, 79, 0.30);
+      border: 2px solid rgba(255, 255, 255, 0.28);
+      box-shadow: 0 8px 22px rgba(255, 58, 79, 0.22);
       align-items: center; justify-content: center;
       font: 800 15px/1 var(--gun-mono);
-      letter-spacing: 0.18em; color: #fff;
+      letter-spacing: 0.18em; color: rgba(255, 255, 255, 0.85);
       user-select: none;
       -webkit-tap-highlight-color: transparent;
       touch-action: none;
@@ -368,10 +365,11 @@ export function injectHUD() {
                   width .18s ease, height .18s ease, font-size .18s ease;
     }
     #mobileFire.firing {
-      background: rgba(255, 58, 79, 0.92);
+      background: rgba(255, 58, 79, 0.78);
+      color: #fff;
       transform: scale(0.93);
-      box-shadow: 0 6px 18px rgba(255, 58, 79, 0.65),
-                  inset 0 0 24px rgba(255, 255, 255, 0.25);
+      box-shadow: 0 6px 18px rgba(255, 58, 79, 0.55),
+                  inset 0 0 22px rgba(255, 255, 255, 0.22);
     }
     /* Smaller fire button in chase / top-down where the joystick is doing the steering */
     @media (pointer: coarse) {
@@ -381,9 +379,10 @@ export function injectHUD() {
       }
     }
 
-    /* Joystick — floating circular base with a draggable inner stick (left thumb) */
+    /* Joystick — circular base + draggable stick (left thumb).
+       Raised + low opacity so it stays out of the way during gameplay */
     #joystick {
-      position: fixed; bottom: 30px; left: 30px;
+      position: fixed; bottom: 90px; left: 30px;
       width: 120px; height: 120px;
       z-index: 99999;
       pointer-events: auto;
@@ -393,29 +392,28 @@ export function injectHUD() {
     #joystickBase {
       position: absolute; inset: 0;
       border-radius: 50%;
-      background: rgba(12, 16, 24, 0.42);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      border: 2px solid rgba(255, 255, 255, 0.20);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.40),
-                  inset 0 0 22px rgba(255, 255, 255, 0.04);
+      background: rgba(12, 16, 24, 0.22);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.30);
     }
     #joystickStick {
       position: absolute; left: 50%; top: 50%;
       width: 52px; height: 52px;
       margin: -26px 0 0 -26px;
       border-radius: 50%;
-      background: rgba(255, 255, 255, 0.36);
-      border: 2px solid rgba(255, 255, 255, 0.55);
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.42);
+      background: rgba(255, 255, 255, 0.20);
+      border: 1px solid rgba(255, 255, 255, 0.38);
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.32);
       pointer-events: none;
       transition: transform .07s ease;
     }
-    /* In FPS the joystick is locked to the X axis only — visual cue: faded vertical bands */
+    /* In FPS the joystick is locked to the X axis only — visual cue: faint horizontal band */
     body.cam-fps #joystickBase {
       background:
-        linear-gradient(0deg, transparent 38%, rgba(255,255,255,0.06) 38%, rgba(255,255,255,0.06) 62%, transparent 62%),
-        rgba(12, 16, 24, 0.42);
+        linear-gradient(0deg, transparent 38%, rgba(255,255,255,0.05) 38%, rgba(255,255,255,0.05) 62%, transparent 62%),
+        rgba(12, 16, 24, 0.22);
     }
 
     body.paused #mobileFire, body.paused #joystick { display: none !important; }

@@ -417,9 +417,24 @@ class Game {
   }
 
   _updateAim() {
-    // Touch: bullets fire in the player's facing direction (no on-screen cursor).
-    // Aim point = 12 units in front of the avatar, projected back to NDC for the raycast.
+    // Touch: bullets fire in the player's facing direction.
+    // Crosshair stays on-screen at all times (FPS = pinned center · CHASE/TOP = clamped).
     if (this._isTouch) {
+      const cross = document.getElementById('gunCrosshair');
+      if (this.cameraMode === 1) {
+        // FPS — aim straight forward via NDC center, crosshair locked to screen center
+        this.aimNDC.x = 0;
+        this.aimNDC.y = 0;
+        this.raycaster.setFromCamera(this.aimNDC, this.camera);
+        const hit = this.raycaster.ray.intersectPlane(GROUND_PLANE, this.aimWorld);
+        if (!hit) this.aimWorld.set(this.player.position.x, 0, this.player.position.z + 1);
+        if (cross) {
+          cross.style.left = (window.innerWidth  / 2) + 'px';
+          cross.style.top  = (window.innerHeight / 2) + 'px';
+        }
+        return;
+      }
+      // CHASE / TOP — project player-forward to NDC; bullet uses raw NDC, crosshair clamps to edge
       const fwdX = Math.sin(this.player.rotation.y);
       const fwdZ = Math.cos(this.player.rotation.y);
       this.aimWorld.set(
@@ -432,10 +447,16 @@ class Game {
       v.project(this.camera);
       this.aimNDC.x = v.x;
       this.aimNDC.y = v.y;
-      // Crosshair is hidden on mobile via CSS — no need to update its DOM position
+      if (cross) {
+        const M = 0.92; // keep crosshair a touch inside the edges so it doesn't get clipped
+        const cx = Math.max(-M, Math.min(M, v.x));
+        const cy = Math.max(-M, Math.min(M, v.y));
+        cross.style.left = ((cx * 0.5 + 0.5) * window.innerWidth) + 'px';
+        cross.style.top  = ((-cy * 0.5 + 0.5) * window.innerHeight) + 'px';
+      }
       return;
     }
-    // Desktop: existing pointer → ground projection
+    // Desktop: pointer → ground projection
     this.aimNDC.x = (this.pointer.x / window.innerWidth) * 2 - 1;
     this.aimNDC.y = -(this.pointer.y / window.innerHeight) * 2 + 1;
     this.raycaster.setFromCamera(this.aimNDC, this.camera);
